@@ -124,6 +124,7 @@ pub fn gather_world(world: &World) -> Vec<DrawRect> {
                 clip,
                 quad: Some(quad),
                 uvs: None,
+                silhouette: false,
             },
         ));
     }

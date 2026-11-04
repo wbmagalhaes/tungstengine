@@ -9,17 +9,31 @@ use crate::ecs::prelude::*;
 
 static QUEUE: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
+const MIN_REPEAT_GAP: f32 = 0.12;
+
 #[derive(Resource, Default)]
-pub struct Sounds(HashMap<String, Vec<(f32, f32)>>);
+pub struct Sounds {
+    tones: HashMap<String, Vec<(f32, f32)>>,
+    last_played: HashMap<String, f32>,
+}
 
 impl Sounds {
     pub fn declare(&mut self, sound: impl Sound, tones: &[(f32, f32)]) -> &mut Self {
-        self.0.insert(sound.name().to_string(), tones.to_vec());
+        self.tones.insert(sound.name().to_string(), tones.to_vec());
         self
     }
 
     pub fn tones(&self, name: &str) -> &[(f32, f32)] {
-        self.0.get(name).map_or(&[], Vec::as_slice)
+        self.tones.get(name).map_or(&[], Vec::as_slice)
+    }
+
+    fn ready(&mut self, name: &str, now: f32) -> bool {
+        let last = self.last_played.get(name).copied();
+        if last.is_some_and(|t| now - t < MIN_REPEAT_GAP) {
+            return false;
+        }
+        self.last_played.insert(name.to_string(), now);
+        true
     }
 }
 
@@ -135,15 +149,25 @@ impl Source for SoftTone {
 
 pub fn drain_sounds(world: &mut World) -> SysResult {
     let queued = take_queued_sounds();
+    let now = world.elapsed();
     let volume = world.resource::<Volume>().copied().unwrap_or_default().sfx;
-    let (Ok(audio), Ok(sounds)) = (world.resource::<Audio>(), world.resource::<Sounds>()) else {
+    let Ok(sounds) = world.resource_mut::<Sounds>() else {
+        return Ok(());
+    };
+    let mut due: Vec<Vec<(f32, f32)>> = Vec::new();
+    for name in &queued {
+        if sounds.ready(name, now) {
+            due.push(sounds.tones(name).to_vec());
+        }
+    }
+    let Ok(audio) = world.resource::<Audio>() else {
         return Ok(());
     };
     if volume <= 0.0 {
         return Ok(());
     }
-    for name in queued {
-        for (i, &(freq, gain)) in sounds.tones(&name).iter().enumerate() {
+    for tones in due {
+        for (i, (freq, gain)) in tones.into_iter().enumerate() {
             audio.tone(freq, gain * volume, Duration::from_millis(70 * i as u64));
         }
     }
@@ -182,6 +206,15 @@ mod sound_tests {
         sounds.declare(Test::AudioTestPing, &[(440.0, 0.5)]);
         assert_eq!(sounds.tones("audio_test_ping"), &[(440.0, 0.5)]);
         assert!(sounds.tones("nope").is_empty());
+    }
+
+    #[test]
+    fn rapid_repeats_of_a_sound_are_merged() {
+        let mut sounds = Sounds::default();
+        assert!(sounds.ready("hit", 1.0));
+        assert!(!sounds.ready("hit", 1.05));
+        assert!(sounds.ready("other", 1.05));
+        assert!(sounds.ready("hit", 1.2));
     }
 
     #[test]

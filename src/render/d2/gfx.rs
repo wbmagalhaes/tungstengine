@@ -17,12 +17,18 @@ struct VsIn {
     @location(0) pos: vec2<f32>,
     @location(1) uv: vec2<f32>,
     @location(2) color: vec4<f32>,
+    @location(3) silhouette: f32,
 };
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    @location(2) silhouette: f32,
 };
+
+fn shade(texel: vec4<f32>, color: vec4<f32>, silhouette: f32) -> vec4<f32> {
+    return mix(texel * color, vec4<f32>(color.rgb, texel.a * color.a), silhouette);
+}
 
 @vertex
 fn vs(in: VsIn) -> VsOut {
@@ -34,6 +40,7 @@ fn vs(in: VsIn) -> VsOut {
     out.clip = vec4<f32>(ndc, 0.0, 1.0);
     out.uv = in.uv;
     out.color = in.color;
+    out.silhouette = in.silhouette;
     return out;
 }
 
@@ -47,7 +54,7 @@ fn fs_mask(in: VsOut) -> @location(0) vec4<f32> {
 fn fs_pixel(in: VsOut) -> @location(0) vec4<f32> {
     let size = vec2<f32>(textureDimensions(tex));
     let texel = (floor(in.uv * size) + vec2<f32>(0.5)) / size;
-    return textureSample(tex, samp, texel) * in.color;
+    return shade(textureSample(tex, samp, texel), in.color, in.silhouette);
 }
 
 @fragment
@@ -57,7 +64,7 @@ fn fs_rgba(in: VsOut) -> @location(0) vec4<f32> {
     let seam = floor(px + 0.5);
     let width = max(fwidth(px), vec2<f32>(1e-4));
     let snapped = seam + clamp((px - seam) / width, vec2<f32>(-0.5), vec2<f32>(0.5));
-    return textureSample(tex, samp, snapped / size) * in.color;
+    return shade(textureSample(tex, samp, snapped / size), in.color, in.silhouette);
 }
 "#;
 
@@ -67,6 +74,7 @@ struct QuadVertex {
     pos: [f32; 2],
     uv: [f32; 2],
     color: [f32; 4],
+    silhouette: f32,
 }
 
 struct Range {
@@ -131,7 +139,8 @@ fn pipeline(
     fragment: &str,
     format: wgpu::TextureFormat,
 ) -> wgpu::RenderPipeline {
-    let attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4];
+    let attrs =
+        wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32];
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(fragment),
         layout: Some(layout),
@@ -372,6 +381,7 @@ impl Gfx {
                     pos,
                     uv,
                     color: q.color,
+                    silhouette: f32::from(u8::from(q.silhouette)),
                 });
             }
             self.indices

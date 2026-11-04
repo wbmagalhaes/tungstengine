@@ -13,6 +13,7 @@ pub struct DrawRect {
     pub clip: [f32; 4],
     pub quad: Option<[[f32; 2]; 4]>,
     pub uvs: Option<[[f32; 2]; 4]>,
+    pub silhouette: bool,
 }
 
 #[derive(Clone, Copy)]

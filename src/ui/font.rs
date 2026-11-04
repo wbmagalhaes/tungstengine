@@ -6,7 +6,7 @@ use fontdue::FontSettings;
 pub const ATLAS_W: usize = 2048;
 pub const ATLAS_H: usize = 2048;
 const METRIC_PX: f32 = 32.0;
-const SPRITE_PX: usize = 64;
+const SPRITE_PX: usize = 256;
 pub const SPRITE_COUNT: usize = 4;
 const MAX_PX: f32 = 256.0;
 

@@ -960,6 +960,7 @@ impl UI {
             clip,
             quad: None,
             uvs: None,
+            silhouette: false,
         });
     }
 
@@ -997,6 +998,7 @@ impl UI {
             clip,
             quad: Some(quad),
             uvs: None,
+            silhouette: false,
         });
     }
 
@@ -1029,6 +1031,7 @@ impl UI {
             clip,
             quad: Some([a, b, d, c]),
             uvs: None,
+            silhouette: false,
         });
     }
 
@@ -1068,6 +1071,7 @@ impl UI {
             clip,
             quad: Some([a, b, d, c]),
             uvs: None,
+            silhouette: false,
         });
     }
 
@@ -1090,6 +1094,7 @@ impl UI {
                 clip,
                 quad: Some([[x0, y0], [x1, y1], [x2, y2], [x2, y2]]),
                 uvs: Some([[u0, v0], [u1, v1], [u2, v2], [u2, v2]]),
+                silhouette: false,
             });
         }
     }
@@ -1112,6 +1117,13 @@ impl UI {
         self.sprite_smooth(sprite.pixel_rect(r), sprite, color);
     }
 
+    pub fn silhouette(&mut self, r: Rect, sprite: impl SpriteArg, color: Color) {
+        self.sprite(r, sprite, color);
+        if let Some(d) = self.draws.last_mut() {
+            d.silhouette = true;
+        }
+    }
+
     pub fn sprite_smooth(&mut self, r: Rect, sprite: impl SpriteArg, color: Color) {
         let sprite = sprite.resolve();
         let clip = self.current_clip();
@@ -1126,6 +1138,7 @@ impl UI {
             clip,
             quad: None,
             uvs: None,
+            silhouette: false,
         });
     }
 
@@ -1209,6 +1222,7 @@ impl UI {
             clip,
             quad: Some(quad),
             uvs: None,
+            silhouette: false,
         });
     }
 
@@ -1252,6 +1266,7 @@ impl UI {
             clip,
             quad: Some(quad),
             uvs: None,
+            silhouette: false,
         });
     }
 
@@ -1290,6 +1305,7 @@ impl UI {
                 clip,
                 quad: None,
                 uvs: None,
+                silhouette: false,
             });
         }
     }
@@ -1345,6 +1361,7 @@ impl UI {
                             clip,
                             quad: None,
                             uvs: None,
+                            silhouette: false,
                         });
                     }
                     pen += g.advance;
