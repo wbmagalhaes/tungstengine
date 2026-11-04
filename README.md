@@ -9,7 +9,7 @@ A 2D and 3D game engine in Rust, built on wgpu and winit.
 - Immediate-mode UI with widgets, tooltips and pause, settings and controls menus
 - Input actions with player rebinding, gamepads and multiple players
 - Localization from TOML files
-- Minimal 2D physics: boxes, circles, gravity, tile collision and raycasts
+- Minimal 2D and 3D physics: boxes, circles, gravity, tile collision and raycasts
 - Scenes and prefabs, tilemaps with layers, autotiling and dual grid
 - Save and settings storage on desktop and web
 - Yarn Spinner dialog
@@ -28,7 +28,7 @@ A 2D and 3D game engine in Rust, built on wgpu and winit.
 | Flag | Enables |
 |---|---|
 | `2d` | 2D renderer and runtime |
-| `3d` | 3D renderer, runtime, physics and navigation |
+| `3d` | 3D renderer and runtime |
 | `scene` | Scenes, prefabs and tilemap spawning |
 | `dialog` | Yarn Spinner dialog |
 
