@@ -5,6 +5,7 @@ use crate::localization::Localization;
 use crate::manifest::{GameAssets, Manifest};
 use crate::menus::{self, GameMenu, MenuStyle};
 use crate::render::ClearColor;
+use crate::runtime::d2::app::SetupFn;
 use crate::settings::GameSettings;
 use crate::ui::UI;
 
@@ -44,7 +45,7 @@ pub fn boot(world: &mut World, assets: GameAssets) {
     world.add_system(drain_sounds);
 }
 
-pub fn run(setup: fn(&mut World), frame: FrameUi) -> Result<(), winit::error::EventLoopError> {
+pub fn run(setup: SetupFn, frame: FrameUi) -> Result<(), winit::error::EventLoopError> {
     #[cfg(not(target_arch = "wasm32"))]
     let _ = env_logger::try_init();
     #[cfg(target_arch = "wasm32")]

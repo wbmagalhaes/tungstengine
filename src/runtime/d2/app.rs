@@ -44,6 +44,7 @@ impl Default for WindowConfig {
 }
 
 pub type FrameUi = fn(&mut World, &mut UI);
+pub type SetupFn = fn(&mut World);
 
 pub struct App {
     world: World,

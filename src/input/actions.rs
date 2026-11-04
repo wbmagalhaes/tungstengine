@@ -42,7 +42,7 @@ struct SavedBindings {
 }
 
 impl Actions {
-    pub fn declare(&mut self, action: impl Action, defaults: &[Binding]) -> &mut Self {
+    pub fn declare(mut self, action: impl Action, defaults: &[Binding]) -> Self {
         let name = action.name();
         let entry = ActionEntry {
             name: name.to_string(),
@@ -237,10 +237,9 @@ mod tests {
     const ALT: Binding = Binding::Key(KeyCode::KeyW);
 
     fn actions() -> Actions {
-        let mut a = Actions::default();
-        a.declare(Act::Jump, &[JUMP]);
-        a.declare(Act::Fire, &[Binding::Mouse(MouseButton::Left)]);
-        a
+        Actions::default()
+            .declare(Act::Jump, &[JUMP])
+            .declare(Act::Fire, &[Binding::Mouse(MouseButton::Left)])
     }
 
     #[test]
