@@ -1,7 +1,7 @@
 use glam::{Mat4, Vec2, Vec3};
 
-use crate::ecs::Baked;
 use crate::ecs::prelude::*;
+use crate::ecs::{Baked, render_offset};
 use crate::ui::DrawRect;
 
 use super::components::{Camera2D, MainCam, SpriteRenderer, View2D};
@@ -47,7 +47,11 @@ pub fn update_view(world: &mut World, screen: Vec2) {
         .map(|(_, g, c, _)| (g.position().truncate(), c.zoom));
     if let Ok(view) = world.resource_mut::<View2D>() {
         if let Some((center, zoom)) = cam {
-            view.center = center;
+            view.center = if view.pixel_snap {
+                (center * zoom).round() / zoom
+            } else {
+                center
+            };
             view.zoom = zoom;
         }
         view.screen = screen;
@@ -61,27 +65,38 @@ pub fn gather_world(world: &World) -> Vec<DrawRect> {
     let half = view.visible_half() + Vec2::splat(4.0);
 
     let mut items: Vec<((i32, f32), DrawRect)> = Vec::new();
-    for (_, g, s) in world.query::<(&GlobalTransform, &SpriteRenderer)>() {
+    for (e, g, s) in world.query::<(&GlobalTransform, &SpriteRenderer)>() {
         if !s.visible || s.color.a <= 0.0 {
             continue;
         }
-        let m = g.matrix();
+        let offset = render_offset(world, e);
+        let m = Mat4::from_translation(offset) * g.matrix();
         let origin = m.transform_point3(Vec3::ZERO).truncate();
         if (origin - view.center).abs().cmpgt(half + s.size).any() {
             continue;
         }
         let lo = -s.anchor * s.size;
         let hi = lo + s.size;
+        let screen = vt.transform_point3(origin.extend(0.0)).truncate();
+        let snap = if view.pixel_snap {
+            screen.round() - screen
+        } else {
+            Vec2::ZERO
+        };
         let corner = |x: f32, y: f32| {
             let p = vt.transform_point3(m.transform_point3(Vec3::new(x, y, 0.0)));
-            [p.x, p.y]
+            [p.x + snap.x, p.y + snap.y]
         };
-        let quad = [
+        let mut quad = [
             corner(lo.x, lo.y),
             corner(hi.x, lo.y),
             corner(lo.x, hi.y),
             corner(hi.x, hi.y),
         ];
+        let axis_aligned = (quad[0][1] - quad[1][1]).abs() < 1e-3;
+        if view.pixel_snap && axis_aligned {
+            quad = quad.map(|p| [p[0].round(), p[1].round()]);
+        }
         let xs = quad.map(|p| p[0]);
         let ys = quad.map(|p| p[1]);
         let min = [
@@ -120,4 +135,59 @@ pub fn gather_world(world: &World) -> Vec<DrawRect> {
         )
     });
     items.into_iter().map(|(_, d)| d).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ecs::RenderOffset;
+
+    fn draw(view: View2D, x: f32, offset: f32) -> DrawRect {
+        let mut world = World::new();
+        world.insert_resource(view);
+        let e = world.spawn();
+        world.insert(
+            e,
+            GlobalTransform(Mat4::from_translation(Vec3::new(x, 0.0, 0.0))),
+        );
+        world.insert(e, SpriteRenderer::default());
+        world.insert(e, RenderOffset(Vec3::new(offset, 0.0, 0.0)));
+        gather_world(&world).remove(0)
+    }
+
+    fn view(pixel_snap: bool) -> View2D {
+        View2D {
+            zoom: 10.0,
+            screen: Vec2::new(100.0, 100.0),
+            pixel_snap,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn sprites_land_on_whole_screen_pixels() {
+        let d = draw(view(true), 0.123, 0.0);
+        assert_eq!(d.min[0], d.min[0].round());
+        assert_ne!(draw(view(false), 0.123, 0.0).min[0], d.min[0]);
+    }
+
+    #[test]
+    fn scaled_sprites_keep_whole_pixel_edges() {
+        let mut world = World::new();
+        world.insert_resource(view(true));
+        let e = world.spawn();
+        let scale = Mat4::from_scale(Vec3::new(1.0, 1.073, 1.0));
+        world.insert(e, GlobalTransform(scale));
+        world.insert(e, SpriteRenderer::default());
+        let d = gather_world(&world).remove(0);
+        assert_eq!(d.max[1], d.max[1].round());
+        assert_eq!(d.min[1], d.min[1].round());
+    }
+
+    #[test]
+    fn render_offset_moves_only_the_drawing() {
+        let moved = draw(view(true), 0.0, 1.0);
+        let base = draw(view(true), 1.0, 0.0);
+        assert_eq!(moved.min, base.min);
+    }
 }

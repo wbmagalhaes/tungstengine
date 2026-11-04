@@ -9,6 +9,7 @@ pub mod color;
 #[cfg(feature = "dialog")]
 pub mod dialog;
 pub mod ecs;
+pub mod fixed_step;
 pub mod grid;
 pub mod input;
 pub mod localization;
@@ -17,7 +18,6 @@ pub mod menus;
 #[cfg(feature = "3d")]
 pub mod nav;
 pub mod num;
-#[cfg(feature = "3d")]
 pub mod physics;
 #[cfg(feature = "3d")]
 pub mod raycast;
@@ -69,6 +69,9 @@ pub mod prelude {
     pub use super::localization::prelude::*;
     pub use super::math::{Mat4, Quat, Vec2, Vec3};
     pub use super::num::BigNumber;
+    pub use super::physics::d2::prelude::*;
+    #[cfg(feature = "3d")]
+    pub use super::physics::d3::prelude::*;
     pub use super::render::ClearColor;
     pub use super::rng::prelude::*;
     pub use super::save::prelude::*;

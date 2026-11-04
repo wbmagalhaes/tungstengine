@@ -83,7 +83,7 @@ fn gather_scene(world: &World) -> Scene {
 
     let mut items = Vec::new();
     for (e, g, r) in world.query::<(&GlobalTransform, &Renderer)>() {
-        let model = g.matrix();
+        let model = Mat4::from_translation(crate::ecs::render_offset(world, e)) * g.matrix();
         let animator = world.get::<Animator>(e);
         for s in &r.slots {
             let model = match &animator {
@@ -120,7 +120,7 @@ fn gather_scene(world: &World) -> Scene {
             else {
                 continue;
             };
-            let model = g.matrix();
+            let model = Mat4::from_translation(crate::ecs::render_offset(world, n)) * g.matrix();
             let animator = world.get::<Animator>(n);
             for s in &r.slots {
                 let model = match &animator {

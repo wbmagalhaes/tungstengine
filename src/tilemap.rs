@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use crate::ecs::prelude::*;
 #[cfg(feature = "scene")]
 use crate::ecs::set_parent;
-use crate::grid::{DUAL_FULL, dual_cells, neighbor_index, neighbor8_index, nine_index};
+use crate::grid::{
+    DUAL_FULL, corner_index, dual_cells, neighbor_index, neighbor8_index, nine_index,
+};
 #[cfg(feature = "scene")]
 use crate::scene::{GameObjDef, Prefabs, SpawnRegistry, spawn_object};
 
@@ -40,6 +42,7 @@ pub enum TileCollision {
     Pass,
     Block,
     Behind,
+    Ignore,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -57,6 +60,8 @@ pub struct TileDef {
     pub fill: Option<String>,
     pub fill_layer: i32,
     pub skip_full: bool,
+    pub seam: Option<String>,
+    pub seam_sprite: Option<String>,
     pub sprite: Option<String>,
     pub prefab: Option<String>,
     pub layer: i32,
@@ -88,6 +93,7 @@ pub struct Tilemap {
     pub origin: [f32; 2],
     pub cell: f32,
     pub plane: TilePlane,
+    pub empty: TileCollision,
     pub tiles: BTreeMap<String, TileDef>,
     #[serde(rename = "layer")]
     pub layers: Vec<TileLayer>,
@@ -101,6 +107,7 @@ impl Default for Tilemap {
             origin: [0.0, 0.0],
             cell: 1.0,
             plane: TilePlane::default(),
+            empty: TileCollision::Pass,
             tiles: BTreeMap::new(),
             layers: Vec::new(),
             objects: Vec::new(),
@@ -160,8 +167,8 @@ impl Tilemap {
             .rev()
             .filter_map(|l| self.tile(l, x, y))
             .map(|t| t.collision)
-            .find(|c| *c != TileCollision::Behind)
-            .unwrap_or(TileCollision::Pass)
+            .find(|c| !matches!(c, TileCollision::Behind | TileCollision::Ignore))
+            .unwrap_or(self.empty)
     }
 
     pub fn is_blocked(&self, x: usize, y: usize) -> bool {
@@ -198,9 +205,14 @@ impl Tilemap {
             let at = |x: f32, y: f32| self.position(x, y, layer.elevation);
             if tile.auto == AutoTile::Dual {
                 for (x, y, index) in dual_cells((0, w - 1), (0, h - 1), on) {
-                    if !(tile.skip_full && index == DUAL_FULL) {
-                        out.push(tile.placed(at(x, y), Some(index.to_string()), layer.order));
+                    if tile.skip_full && index == DUAL_FULL {
+                        continue;
                     }
+                    let mut placed = tile.placed(at(x, y), Some(index.to_string()), layer.order);
+                    if let Some(sprite) = tile.seam_at(layer, x, y) {
+                        placed.sprite = Some(sprite);
+                    }
+                    out.push(placed);
                 }
             }
             for y in 0..h {
@@ -232,6 +244,13 @@ impl Tilemap {
 }
 
 impl TileDef {
+    fn seam_at(&self, layer: &TileLayer, x: f32, y: f32) -> Option<String> {
+        let (seam, sprite) = (self.seam.as_deref()?, self.seam_sprite.as_deref()?);
+        let (vx, vy) = ((x + 0.5) as i32, (y + 0.5) as i32);
+        let mask = corner_index(vx, vy, |a, b| layer.is(seam, a, b));
+        (mask != 0).then(|| format!("{sprite}_{mask}"))
+    }
+
     fn placed(&self, pos: Vec3, suffix: Option<String>, order: i32) -> TilePlacement {
         let name = |base: &String| match &suffix {
             Some(s) => format!("{base}_{s}"),
@@ -395,6 +414,47 @@ sprite = "roof"
         assert!(collision_map(&[&["b"], &["s"]]).is_blocked(0, 0));
         assert!(!collision_map(&[&["p"], &["s"]]).is_blocked(0, 0));
         assert!(!collision_map(&[&["s"]]).is_blocked(0, 0));
+    }
+
+    #[test]
+    fn ignored_tiles_defer_and_empty_cells_use_the_map_default() {
+        let mut m = collision_map(&[&["b."], &["i."]]);
+        m.tiles.insert(
+            "i".into(),
+            TileDef {
+                collision: TileCollision::Ignore,
+                ..Default::default()
+            },
+        );
+        assert!(m.is_blocked(0, 0));
+        assert!(!m.is_blocked(1, 0));
+        m.empty = TileCollision::Block;
+        assert!(m.is_blocked(1, 0));
+    }
+
+    #[test]
+    fn dual_pieces_touching_a_seam_use_the_seam_sprite() {
+        let m = Tilemap {
+            layers: layer(&["RRR", ".D."]),
+            tiles: BTreeMap::from([(
+                "R".to_string(),
+                TileDef {
+                    sprite: Some("roof".into()),
+                    auto: AutoTile::Dual,
+                    seam: Some("D".into()),
+                    seam_sprite: Some("door".into()),
+                    ..Default::default()
+                },
+            )]),
+            ..Default::default()
+        };
+        let names: Vec<_> = m
+            .placements()
+            .into_iter()
+            .filter_map(|p| p.sprite)
+            .collect();
+        assert!(names.iter().any(|n| n == "door_8"));
+        assert!(names.iter().any(|n| n == "door_4"));
     }
 
     #[test]

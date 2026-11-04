@@ -44,6 +44,13 @@ fn fs_mask(in: VsOut) -> @location(0) vec4<f32> {
 }
 
 @fragment
+fn fs_pixel(in: VsOut) -> @location(0) vec4<f32> {
+    let size = vec2<f32>(textureDimensions(tex));
+    let texel = (floor(in.uv * size) + vec2<f32>(0.5)) / size;
+    return textureSample(tex, samp, texel) * in.color;
+}
+
+@fragment
 fn fs_rgba(in: VsOut) -> @location(0) vec4<f32> {
     let size = vec2<f32>(textureDimensions(tex));
     let px = in.uv * size;
@@ -75,6 +82,7 @@ pub struct Gfx {
     uniform: wgpu::Buffer,
     mask_pipeline: wgpu::RenderPipeline,
     rgba_pipeline: wgpu::RenderPipeline,
+    pixel_pipeline: wgpu::RenderPipeline,
     atlas_bind_group: wgpu::BindGroup,
     sprite_bind_groups: Vec<wgpu::BindGroup>,
     sprite_textures: Vec<wgpu::Texture>,
@@ -219,6 +227,7 @@ impl Gfx {
             immediate_size: 0,
         });
         let mask_pipeline = pipeline(device, &layout, &shader, "fs_mask", config.format);
+        let pixel_pipeline = pipeline(device, &layout, &shader, "fs_pixel", config.format);
         let rgba_pipeline = pipeline(device, &layout, &shader, "fs_rgba", config.format);
 
         let mut sprite_textures = Vec::new();
@@ -270,6 +279,7 @@ impl Gfx {
             uniform,
             mask_pipeline,
             rgba_pipeline,
+            pixel_pipeline,
             atlas_bind_group,
             sprite_bind_groups,
             sprite_textures,
@@ -406,7 +416,7 @@ impl Gfx {
         }
     }
 
-    pub fn render(&mut self, clear: Color, world: &[DrawRect], ui: &[DrawRect]) {
+    pub fn render(&mut self, clear: Color, world: &[DrawRect], ui: &[DrawRect], pixel_world: bool) {
         self.sync_atlas();
         let dims = [
             self.gpu.config.width as f32,
@@ -424,6 +434,7 @@ impl Gfx {
 
         let world_order: Vec<usize> = (0..world.len()).collect();
         self.batch(world, &world_order, &mut ranges);
+        let world_ranges = if pixel_world { ranges.len() } else { 0 };
 
         let mut ui_order: Vec<usize> = (0..ui.len()).collect();
         ui_order.sort_by(|&a, &b| {
@@ -479,7 +490,7 @@ impl Gfx {
                 pass.set_vertex_buffer(0, self.vertex_buf.slice(..));
                 pass.set_index_buffer(self.index_buf.slice(..), wgpu::IndexFormat::Uint32);
             }
-            for r in &ranges {
+            for (i, r) in ranges.iter().enumerate() {
                 if r.scissor[2] == 0 || r.scissor[3] == 0 || r.count == 0 {
                     continue;
                 }
@@ -487,7 +498,11 @@ impl Gfx {
                     pass.set_pipeline(&self.mask_pipeline);
                     pass.set_bind_group(0, &self.atlas_bind_group, &[]);
                 } else if let Some(bg) = self.sprite_bind_groups.get(r.tex as usize - 1) {
-                    pass.set_pipeline(&self.rgba_pipeline);
+                    pass.set_pipeline(if i < world_ranges {
+                        &self.pixel_pipeline
+                    } else {
+                        &self.rgba_pipeline
+                    });
                     pass.set_bind_group(0, bg, &[]);
                 } else {
                     continue;

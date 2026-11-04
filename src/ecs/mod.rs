@@ -9,7 +9,9 @@ mod world;
 
 pub mod prelude;
 
-pub use components::{Baked, Children, GlobalTransform, Parent, Static, Transform};
+pub use components::{
+    Baked, Children, GlobalTransform, Parent, RenderOffset, Static, Transform, render_offset,
+};
 pub use ecs_macros::{Component, Resource};
 pub use entity::Entity;
 pub use hash::{FastHasher, FastMap};

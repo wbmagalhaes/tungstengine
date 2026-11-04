@@ -81,6 +81,7 @@ pub struct MainCam;
 
 #[derive(Resource, Clone, Copy)]
 pub struct View2D {
+    pub pixel_snap: bool,
     pub center: Vec2,
     pub zoom: f32,
     pub screen: Vec2,
@@ -89,6 +90,7 @@ pub struct View2D {
 impl Default for View2D {
     fn default() -> Self {
         View2D {
+            pixel_snap: true,
             center: Vec2::ZERO,
             zoom: 48.0,
             screen: Vec2::new(1280.0, 720.0),

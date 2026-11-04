@@ -1,6 +1,6 @@
 use glam::{Mat4, Quat, Vec3};
 
-use crate::ecs::{Component, Entity};
+use crate::ecs::{Component, Entity, World};
 
 #[derive(Component, Clone, Copy)]
 pub struct Transform {
@@ -87,3 +87,16 @@ pub struct Static;
 
 #[derive(Component, Clone, Copy, Default)]
 pub struct Baked;
+
+#[derive(Component, Clone, Copy, Default, Debug, PartialEq)]
+pub struct RenderOffset(pub Vec3);
+
+pub fn render_offset(world: &World, e: Entity) -> Vec3 {
+    let mut total = Vec3::ZERO;
+    let mut node = Some(e);
+    while let Some(n) = node {
+        total += world.get::<RenderOffset>(n).map_or(Vec3::ZERO, |o| o.0);
+        node = world.get::<Parent>(n).map(|p| p.0);
+    }
+    total
+}

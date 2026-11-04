@@ -9,6 +9,7 @@ A 2D and 3D game engine in Rust, built on wgpu and winit.
 - Immediate-mode UI with widgets, tooltips and pause, settings and controls menus
 - Input actions with player rebinding, gamepads and multiple players
 - Localization from TOML files
+- Minimal 2D physics: boxes, circles, gravity, tile collision and raycasts
 - Scenes and prefabs, tilemaps with layers, autotiling and dual grid
 - Save and settings storage on desktop and web
 - Yarn Spinner dialog
@@ -53,49 +54,55 @@ Translations live in `assets/locale/<locale>.toml`.
 use tungstengine::prelude::*;
 use tungstengine::runtime::d2::run;
 
-const GRAVITY: f32 = 1800.0;
 const JUMP_SPEED: f32 = 700.0;
 const SIZE: f32 = 64.0;
+const GROUND_Y: f32 = 560.0;
 
 #[derive(Action, Clone, Copy)]
 enum GameAction {
     Jump,
 }
 
-#[derive(Resource, Default)]
-struct Player {
-    height: f32,
-    speed: f32,
-}
+#[derive(Component)]
+struct Player;
 
 fn setup(world: &mut World) {
     tungstengine::boot!(world);
     let mut actions = Actions::default();
     actions.declare(GameAction::Jump, &[Binding::Key(KeyCode::Space)]);
     world.load_actions(actions);
-    world.insert_resource(Player::default());
+    world.insert_resource(Physics2D::with_gravity(Vec2::new(0.0, 1800.0)));
+
+    let player = world.spawn();
+    world.insert(player, Player);
+    world.insert(player, Transform::from_pos(Vec3::new(640.0, 300.0, 0.0)));
+    world.insert(player, Collider2D::rect(Vec2::splat(SIZE)));
+    world.insert(player, Body2D::default());
+
+    let ground = world.spawn();
+    world.insert(ground, Transform::from_pos(Vec3::new(640.0, GROUND_Y + 80.0, 0.0)));
+    world.insert(ground, Collider2D::rect(Vec2::new(4000.0, 160.0)));
+
+    world.add_system(jump);
+    world.add_system(physics2d_step);
+}
+
+fn jump(world: &mut World) -> SysResult {
+    let pressed = world.input().pressed(GameAction::Jump);
+    for (_, body, _) in world.query_mut::<(&mut Body2D, &Player)>() {
+        if pressed && body.on_ground {
+            body.velocity.y = -JUMP_SPEED;
+        }
+    }
+    Ok(())
 }
 
 fn frame(world: &mut World, ui: &mut UI) {
-    let jump = world.input().pressed(GameAction::Jump);
-    let dt = world.dt();
-    let Ok(player) = world.resource_mut::<Player>() else {
-        return;
-    };
-    if jump && player.height <= 0.0 {
-        player.speed = JUMP_SPEED;
+    ui.fill(Rect::new(0.0, GROUND_Y, ui.width, ui.height), Color::GRAY_700);
+    for (_, t, _) in world.query::<(&Transform, &Player)>() {
+        let (x, y) = (t.position.x - SIZE / 2.0, t.position.y - SIZE / 2.0);
+        ui.fill(Rect::new(x, y, SIZE, SIZE).with_z(1.0), Color::AMBER_300);
     }
-    player.speed -= GRAVITY * dt;
-    player.height = (player.height + player.speed * dt).max(0.0);
-    if player.height <= 0.0 {
-        player.speed = 0.0;
-    }
-
-    let ground = ui.height - 120.0;
-    ui.fill(Rect::new(0.0, ground, ui.width, 120.0), Color::GRAY_700);
-    let x = (ui.width - SIZE) / 2.0;
-    let y = ground - SIZE - player.height;
-    ui.fill(Rect::new(x, y, SIZE, SIZE).with_z(1.0), Color::AMBER_300);
     ui.add(Text::new(16.0, 16.0, "Press Space to jump"));
 }
 

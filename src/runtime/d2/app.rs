@@ -149,7 +149,8 @@ impl App {
                     gfx.sync_sprites(sprites, &dirty);
                 }
             }
-            gfx.render(clear, &world_draws, &self.ui.draws);
+            let pixel_world = self.world.resource::<View2D>().is_ok_and(|v| v.pixel_snap);
+            gfx.render(clear, &world_draws, &self.ui.draws, pixel_world);
         }
     }
 }
