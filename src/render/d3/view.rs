@@ -919,3 +919,20 @@ pub struct OverlayHook {
     pub scene: fn(&World) -> Option<Scene>,
     pub intro: fn(&World) -> f32,
 }
+
+pub fn load_models(reg: &mut MeshRegistry, dir: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            load_models(reg, &path);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("glb")
+            && let Some(s) = path.to_str()
+            && reg.load(s).is_none()
+        {
+            log::error!("failed to load model {}", path.display());
+        }
+    }
+}

@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+    <title>{{title}}</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><text y=%2214%22 font-size=%2214%22>{{icon}}</text></svg>"
+    />
+    <style>
+{{style}}
+    </style>
+  </head>
+  <body>
+{{wrapper}}
+    <script>
+      // Browsers start every AudioContext suspended until a user gesture.
+      // cpal builds its context internally, so track instances and resume them on first input.
+      (() => {
+        const live = new Set();
+        for (const name of ["AudioContext", "webkitAudioContext"]) {
+          const Orig = window[name];
+          if (!Orig) continue;
+          const Patched = function (...args) {
+            const ctx = new Orig(...args);
+            live.add(ctx);
+            return ctx;
+          };
+          Patched.prototype = Orig.prototype;
+          window[name] = Patched;
+        }
+        const resume = () => {
+          for (const ctx of live) {
+            if (ctx.state === "suspended") ctx.resume().catch(() => {});
+          }
+        };
+        for (const evt of ["pointerdown", "keydown", "touchstart"]) {
+          window.addEventListener(evt, resume);
+        }
+      })();
+    </script>
+    <script type="module">
+      import init from "./{{js}}";
+      init()
+        .then(() => {
+          document.getElementById("loading")?.remove();
+          document.getElementById("game")?.focus();
+        })
+        .catch((e) => {
+          const el = document.getElementById("loading");
+          if (el) el.textContent = "failed to load: " + e;
+          console.error(e);
+        });
+    </script>
+  </body>
+</html>

@@ -1,3 +1,5 @@
+use std::sync::OnceLock;
+
 use std::collections::{HashMap, HashSet};
 
 use tungstengine::ecs::prelude::*;
@@ -6,7 +8,7 @@ use tungstengine::scene::def::ColliderDef;
 use tungstengine::scene::{GameObjDef, component_type};
 
 use super::form::Form;
-use super::{collider, generic, interactable};
+use super::{collider, generic};
 use crate::scene::node::{self, NodeRef};
 use crate::scene::state::EditorState;
 
@@ -40,12 +42,43 @@ fn is_hidden(c: &toml::Value) -> bool {
     component_type(c) == Some("transform")
 }
 
+pub type InspectorFn = fn(&mut Form, u64, &toml::Table) -> Option<toml::Table>;
+
+type LinkedDefault = (&'static str, &'static str, &'static str);
+
+type CustomInspector = (&'static str, InspectorFn);
+
+static CUSTOM: OnceLock<(&[CustomInspector], &[LinkedDefault])> = OnceLock::new();
+
+pub fn set_custom(
+    inspectors: &'static [(&'static str, InspectorFn)],
+    linked: &'static [LinkedDefault],
+) {
+    let _ = CUSTOM.set((inspectors, linked));
+}
+
+fn custom_inspector(ty: &str) -> Option<InspectorFn> {
+    let (inspectors, _) = CUSTOM.get()?;
+    inspectors.iter().find(|(t, _)| *t == ty).map(|(_, f)| *f)
+}
+
+fn linked_defaults(ty: &str) -> impl Iterator<Item = (&'static str, &'static str)> {
+    let ty = ty.to_string();
+    CUSTOM
+        .get()
+        .into_iter()
+        .flat_map(|(_, linked)| linked.iter())
+        .filter(move |(t, _, _)| *t == ty)
+        .map(|(_, to, from)| (*to, *from))
+}
+
 fn derived_defaults(ty: &str, merged: &mut toml::Table, defaulted: &HashSet<String>) {
-    if ty == "interactable"
-        && defaulted.contains("pick")
-        && let Some(r) = merged.get("radius").cloned()
-    {
-        merged.insert("pick".into(), r);
+    for (to, from) in linked_defaults(ty) {
+        if defaulted.contains(to)
+            && let Some(v) = merged.get(from).cloned()
+        {
+            merged.insert(to.into(), v);
+        }
     }
 }
 
@@ -123,11 +156,12 @@ pub fn views(
         derived_defaults(ty, &mut merged, &defaulted);
         let mut base = defs;
         derived_defaults(ty, &mut base, &defaulted);
-        if let Some(r) = merged
-            .get("radius")
-            .filter(|_| ty == "interactable" && defaulted.contains("pick"))
-        {
-            base.insert("pick".into(), r.clone());
+        for (to, from) in linked_defaults(ty) {
+            if defaulted.contains(to)
+                && let Some(v) = merged.get(from)
+            {
+                base.insert(to.into(), v.clone());
+            }
         }
         out.push(View {
             ty: ty.to_string(),
@@ -189,8 +223,8 @@ pub fn draw(f: &mut Form, views: &[View], is_instance: bool) -> Option<CompActio
         let slot = SLOT_BASE + vi as u64 * SLOTS_PER_VIEW;
         let edited = if v.ty == "collider" {
             collider::draw_fields(f, slot, &v.table)
-        } else if v.ty == "interactable" {
-            interactable::draw_fields(f, slot, &v.table)
+        } else if let Some(custom) = custom_inspector(&v.ty) {
+            custom(f, slot, &v.table)
         } else {
             generic::draw_fields(f, slot, &v.table)
         };

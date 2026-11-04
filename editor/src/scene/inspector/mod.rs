@@ -2,7 +2,6 @@ mod collider;
 mod components;
 mod form;
 mod generic;
-mod interactable;
 mod name;
 mod transform;
 
@@ -15,7 +14,10 @@ use super::files::Modal;
 use super::node::{self, NodeRef};
 use super::state::EditorState;
 use super::tree::{PREFAB_COLOR, def_label, placed_label};
-use form::{FONT, Form, LINE_H};
+pub use components::{InspectorFn, set_custom};
+pub use form::Form;
+use form::{FONT, LINE_H};
+pub use generic::edit_value;
 
 const HEADER_H: f32 = 32.0;
 const HIDDEN_COMPONENTS: [&str; 2] = ["transform", "walk_grid"];

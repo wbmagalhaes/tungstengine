@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use winit::event::MouseButton;
 use winit::keyboard::KeyCode;
 
+use tungstengine::color::Color;
 use tungstengine::ecs::prelude::*;
 use tungstengine::input::Input;
 use tungstengine::render::d3::prelude::*;
@@ -29,9 +30,30 @@ use gizmo::Tool;
 use menu::{Cmd, FileOp};
 use state::{DocKind, EditorState, FrameInput, PREFABS_DIR, file_name, file_stem};
 
+pub use inspector::{Form, InspectorFn, edit_value};
+
+#[derive(Clone, Copy)]
+pub struct SelectionRing {
+    pub center: glam::Vec3,
+    pub axis: glam::Vec3,
+    pub radius: f32,
+    pub color: Color,
+    pub width: f32,
+}
+
+pub type SelectionRings = fn(&World, Entity) -> Vec<SelectionRing>;
+
 pub struct EditorConfig {
     pub register: fn(&mut scene::SpawnRegistry),
     pub start_scene: &'static str,
+    pub inspectors: &'static [(&'static str, InspectorFn)],
+    pub linked_defaults: &'static [(&'static str, &'static str, &'static str)],
+    pub selection_rings: Option<SelectionRings>,
+}
+
+#[derive(Resource, Clone, Copy)]
+pub struct EditorHooks {
+    pub selection_rings: Option<SelectionRings>,
 }
 
 pub fn run(config: EditorConfig) -> Result<(), winit::error::EventLoopError> {
@@ -44,9 +66,12 @@ pub fn run(config: EditorConfig) -> Result<(), winit::error::EventLoopError> {
 }
 
 pub fn setup(world: &mut World, config: EditorConfig) {
+    inspector::set_custom(config.inspectors, config.linked_defaults);
+    world.insert_resource(EditorHooks {
+        selection_rings: config.selection_rings,
+    });
     let mut spawn_reg = scene::SpawnRegistry::default();
     scene::register_builtin(&mut spawn_reg);
-    tungstengine_adventure::scene_spawn::register(&mut spawn_reg);
     (config.register)(&mut spawn_reg);
     world.insert_resource(spawn_reg);
     world.insert_resource(scene::DeferredSpawns::default());
@@ -54,7 +79,7 @@ pub fn setup(world: &mut World, config: EditorConfig) {
     grid::setup(world);
 
     let mut meshes = MeshRegistry::new();
-    tungstengine_adventure::load_models(&mut meshes, Path::new("assets/models"));
+    tungstengine::render::d3::load_models(&mut meshes, Path::new("assets/models"));
     world.insert_resource(meshes);
     world.insert_resource(tungstengine::texture::load_textures(Path::new(
         "assets/textures",

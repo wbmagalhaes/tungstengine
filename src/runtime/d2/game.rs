@@ -47,6 +47,11 @@ pub fn boot(world: &mut World, assets: GameAssets) {
 pub fn run(setup: fn(&mut World), frame: FrameUi) -> Result<(), winit::error::EventLoopError> {
     #[cfg(not(target_arch = "wasm32"))]
     let _ = env_logger::try_init();
+    #[cfg(target_arch = "wasm32")]
+    {
+        console_error_panic_hook::set_once();
+        let _ = console_log::init_with_level(log::Level::Warn);
+    }
     let mut world = World::new();
     setup(&mut world);
     App::new(world, frame).run()

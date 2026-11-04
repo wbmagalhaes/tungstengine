@@ -5,6 +5,8 @@ mod shader;
 mod transition;
 pub mod view;
 
+pub use view::load_models;
+
 pub use components::{
     Camera, Faces, Hovered, MainCam, Material, Mesh, Outline, RenderSlot, Renderer, Shader,
 };

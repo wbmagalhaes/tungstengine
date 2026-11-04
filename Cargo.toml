@@ -1,5 +1,5 @@
 [workspace]
-members = ["adventure", "ecs_macros", "editor"]
+members = ["ecs_macros", "editor"]
 
 [package]
 name = "tungstengine"
@@ -38,6 +38,8 @@ pollster = "0.4.0"
 rodio = "0.20"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1.7"
+console_log = "1.0"
 rodio = { version = "0.20", features = ["wasm-bindgen"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

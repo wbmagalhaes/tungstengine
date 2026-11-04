@@ -36,6 +36,20 @@ pub mod texture;
 pub mod tilemap;
 pub mod ui;
 
+#[cfg(target_arch = "wasm32")]
+pub use wasm_bindgen;
+
+#[macro_export]
+macro_rules! web_entry {
+    ($setup:expr, $frame:expr) => {
+        #[cfg(target_arch = "wasm32")]
+        #[$crate::wasm_bindgen::prelude::wasm_bindgen(start, wasm_bindgen = $crate::wasm_bindgen)]
+        pub fn web_start() {
+            $crate::runtime::d2::run($setup, $frame).expect("event loop");
+        }
+    };
+}
+
 #[macro_export]
 macro_rules! boot {
     ($world:expr) => {

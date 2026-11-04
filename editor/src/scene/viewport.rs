@@ -6,11 +6,8 @@ use tungstengine::color::Color;
 use tungstengine::ecs::prelude::*;
 use tungstengine::nav::WalkGrid;
 use tungstengine::physics::Collider;
-use tungstengine::raycast;
 use tungstengine::render::d3::prelude::*;
 use tungstengine::ui::prelude::*;
-use tungstengine_adventure::Interactable;
-use tungstengine_adventure::interact::REACH;
 
 use super::camera::{self, CamInput};
 use super::gizmo::{self, Op, Pointer, View};
@@ -20,8 +17,6 @@ use super::state::{EditorState, FrameInput};
 use super::{grid, inspector, pick, toolbar, tree};
 
 const TREE_W: f32 = 260.0;
-const REACH_COLOR: Color = Color::AMBER_400;
-const PICK_COLOR: Color = Color::CYAN_300;
 const PANEL_TOP: f32 = BAR_H + TOOLBAR_H + 8.0;
 
 fn ground(ray: &CursorRay) -> Vec3 {
@@ -141,35 +136,28 @@ fn draw_interactable(world: &World, ui: &mut UI, selected: Option<Entity>) {
     let Some(view) = View::of(world, ui.width, ui.height) else {
         return;
     };
+    let Some(rings) = world
+        .resource::<super::EditorHooks>()
+        .ok()
+        .and_then(|h| h.selection_rings)
+    else {
+        return;
+    };
     let mut stack = vec![e];
     while let Some(n) = stack.pop() {
         if let Some(c) = world.get::<Children>(n) {
             stack.extend(c.0.iter().copied());
         }
-        let (Some(i), Some(g)) = (
-            world.get::<Interactable>(n),
-            world.get::<GlobalTransform>(n),
-        ) else {
-            continue;
-        };
-        let pos = g.position();
-        let ground = Vec3::new(pos.x, 0.02, pos.z);
-        gizmo::world_circle(
-            ui,
-            &view,
-            ground,
-            Vec3::Y,
-            i.radius + REACH,
-            REACH_COLOR,
-            1.5,
-        );
-        let has_mesh = raycast::subtree(world, n)
-            .iter()
-            .any(|x| world.has::<Renderer>(*x));
-        if !has_mesh || i.pick_explicit {
-            for axis in [Vec3::X, Vec3::Y, Vec3::Z] {
-                gizmo::world_circle(ui, &view, pos, axis, i.pick, PICK_COLOR, 1.0);
-            }
+        for ring in rings(world, n) {
+            gizmo::world_circle(
+                ui,
+                &view,
+                ring.center,
+                ring.axis,
+                ring.radius,
+                ring.color,
+                ring.width,
+            );
         }
     }
 }
