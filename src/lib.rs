@@ -1,0 +1,65 @@
+extern crate self as tungstengine;
+
+pub use glam as math;
+
+pub mod animation;
+pub mod audio;
+pub mod clipboard;
+pub mod color;
+#[cfg(feature = "dialog")]
+pub mod dialog;
+pub mod ecs;
+pub mod grid;
+pub mod input;
+pub mod localization;
+pub mod manifest;
+pub mod menus;
+#[cfg(feature = "3d")]
+pub mod nav;
+pub mod num;
+#[cfg(feature = "3d")]
+pub mod physics;
+#[cfg(feature = "3d")]
+pub mod raycast;
+pub mod render;
+pub mod rng;
+#[cfg(feature = "3d")]
+pub mod rules;
+pub mod runtime;
+pub mod save;
+#[cfg(feature = "scene")]
+pub mod scene;
+pub mod settings;
+pub mod sprites;
+pub mod storage;
+pub mod texture;
+pub mod tilemap;
+pub mod ui;
+
+#[macro_export]
+macro_rules! boot {
+    ($world:expr) => {
+        $crate::runtime::d2::boot($world, $crate::manifest::embed_game!())
+    };
+    ($world:expr, $manifest:literal) => {
+        $crate::runtime::d2::boot($world, $crate::manifest::embed_game!($manifest))
+    };
+}
+
+pub mod prelude {
+    pub use super::animation::prelude::*;
+    pub use super::audio::prelude::*;
+    pub use super::color::prelude::*;
+    pub use super::ecs::prelude::*;
+    pub use super::input::prelude::*;
+    pub use super::localization::prelude::*;
+    pub use super::math::{Mat4, Quat, Vec2, Vec3};
+    pub use super::num::BigNumber;
+    pub use super::render::ClearColor;
+    pub use super::rng::prelude::*;
+    pub use super::save::prelude::*;
+    pub use super::settings::GameSettings;
+    pub use super::sprites::prelude::*;
+    pub use super::texture::prelude::*;
+    pub use super::ui::prelude::*;
+}

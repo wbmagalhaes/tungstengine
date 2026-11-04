@@ -1,0 +1,12 @@
+[menus]
+pause = "Paused"
+resume = "Resume"
+settings = "Settings"
+controls = "Controls"
+quit = "Quit game"
+sfx = "Sound effects"
+bgm = "Music"
+fullscreen = "Fullscreen"
+back = "Back"
+press_key = "Press a key..."
+reset = "Reset to defaults"

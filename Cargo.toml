@@ -1,0 +1,44 @@
+[workspace]
+members = ["adventure", "ecs_macros", "editor"]
+
+[package]
+name = "tungstengine"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["2d", "3d", "dialog", "scene"]
+2d = []
+scene = ["dep:uuid"]
+3d = ["dep:gltf", "scene", "wgpu/glsl"]
+dialog = ["dep:yarnspinner"]
+
+[dependencies]
+bytemuck = { version = "1.25.0", features = ["derive"] }
+ecs_macros = { path = "ecs_macros" }
+fontdue = "0.9.3"
+glam = "0.33.1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+log = "0.4"
+png = "0.18.1"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+wgpu = { version = "29.0.3", features = ["webgl"] }
+web-time = "1.1"
+winit = { version = "0.30.13", features = ["serde"] }
+gltf = { version = "1.4", default-features = false, features = ["utils", "names", "KHR_texture_transform"], optional = true }
+uuid = { version = "1.23.3", features = ["v4", "serde"], optional = true }
+yarnspinner = { version = "0.8.0", optional = true }
+gilrs = "0.11"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+env_logger = "0.11"
+arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
+pollster = "0.4.0"
+rodio = "0.20"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+rodio = { version = "0.20", features = ["wasm-bindgen"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Document", "Element", "HtmlCanvasElement", "Storage", "Window"] }

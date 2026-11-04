@@ -1,0 +1,34 @@
+[verb]
+look = "Look"
+examine = "Examine"
+take = "Take"
+use = "Use"
+open = "Open"
+enter = "Enter"
+push = "Push"
+talk = "Talk"
+subir = "Go up"
+descer = "Go down"
+
+[hud]
+combine = "Combine {a} with {b}"
+no_combine = "{a} and {b} don't combine."
+hint = "ESC menu | F1 debug | F5 save | F9 load"
+use_on = "{verb} {item} on {target}"
+cant_use = "Can't use {item} here."
+cant_use_on = "Can't use {item} on {target}."
+
+[inspect]
+hint = "drag to rotate | scroll to zoom | ESC to close"
+
+[menu]
+play = "PLAY"
+quit = "QUIT"
+
+[settings]
+speed_slow = "Speed: Slow"
+speed_normal = "Speed: Normal"
+speed_fast = "Speed: Fast"
+
+[menus]
+quit = "Main menu"
