@@ -53,9 +53,19 @@ Translations live in `assets/locale/<locale>.toml`.
 use tungstengine::prelude::*;
 use tungstengine::runtime::d2::run;
 
+const GRAVITY: f32 = 1800.0;
+const JUMP_SPEED: f32 = 700.0;
+const SIZE: f32 = 64.0;
+
 #[derive(Action, Clone, Copy)]
 enum GameAction {
     Jump,
+}
+
+#[derive(Resource, Default)]
+struct Player {
+    height: f32,
+    speed: f32,
 }
 
 fn setup(world: &mut World) {
@@ -63,13 +73,30 @@ fn setup(world: &mut World) {
     let mut actions = Actions::default();
     actions.declare(GameAction::Jump, &[Binding::Key(KeyCode::Space)]);
     world.load_actions(actions);
+    world.insert_resource(Player::default());
 }
 
 fn frame(world: &mut World, ui: &mut UI) {
-    if world.input().pressed(GameAction::Jump) {
-        log::info!("jump");
+    let jump = world.input().pressed(GameAction::Jump);
+    let dt = world.dt();
+    let Ok(player) = world.resource_mut::<Player>() else {
+        return;
+    };
+    if jump && player.height <= 0.0 {
+        player.speed = JUMP_SPEED;
     }
-    ui.add(Text::new(16.0, 16.0, "Hello"));
+    player.speed -= GRAVITY * dt;
+    player.height = (player.height + player.speed * dt).max(0.0);
+    if player.height <= 0.0 {
+        player.speed = 0.0;
+    }
+
+    let ground = ui.height - 120.0;
+    ui.fill(Rect::new(0.0, ground, ui.width, 120.0), Color::GRAY_700);
+    let x = (ui.width - SIZE) / 2.0;
+    let y = ground - SIZE - player.height;
+    ui.fill(Rect::new(x, y, SIZE, SIZE).with_z(1.0), Color::AMBER_300);
+    ui.add(Text::new(16.0, 16.0, "Press Space to jump"));
 }
 
 fn main() -> SysResult {
