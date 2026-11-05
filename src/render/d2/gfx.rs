@@ -7,6 +7,8 @@ use crate::color::Color;
 use crate::sprites::Sprites;
 use crate::ui::DrawRect;
 
+use super::components::LayerShader;
+
 const QUAD_WGSL: &str = r#"
 struct Globals { screen: vec2<f32>, pad: vec2<f32> };
 @group(0) @binding(0) var<uniform> globals: Globals;
@@ -58,6 +60,11 @@ fn fs_pixel(in: VsOut) -> @location(0) vec4<f32> {
 }
 
 @fragment
+fn fs_smooth(in: VsOut) -> @location(0) vec4<f32> {
+    return shade(textureSample(tex, samp, in.uv), in.color, in.silhouette);
+}
+
+@fragment
 fn fs_rgba(in: VsOut) -> @location(0) vec4<f32> {
     let size = vec2<f32>(textureDimensions(tex));
     let px = in.uv * size;
@@ -77,6 +84,55 @@ struct QuadVertex {
     silhouette: f32,
 }
 
+pub(super) const LAYER_PRELUDE: &str = r#"
+struct LayerGlobals {
+    screen: vec2<f32>,
+    time: f32,
+    pad: f32,
+    params: array<vec4<f32>, 4>,
+};
+@group(0) @binding(0) var<uniform> layer: LayerGlobals;
+@group(0) @binding(1) var layer_tex: texture_2d<f32>;
+@group(0) @binding(2) var layer_samp: sampler;
+
+fn fullscreen_position(i: u32) -> vec4<f32> {
+    let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+    return vec4<f32>(p * 2.0 - 1.0, 0.0, 1.0);
+}
+
+fn fullscreen_uv(i: u32) -> vec2<f32> {
+    let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+    return vec2<f32>(p.x, 1.0 - p.y);
+}
+"#;
+
+const LAYER_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+pub struct LayerFrame<'a> {
+    pub shaders: &'a [LayerShader],
+    pub draws: &'a [(i32, Vec<DrawRect>)],
+    pub time: f32,
+}
+
+struct LayerProgram {
+    layer: i32,
+    source: &'static str,
+    pipeline: wgpu::RenderPipeline,
+    uniform: wgpu::Buffer,
+    target: wgpu::TextureView,
+    group: wgpu::BindGroup,
+    size: (u32, u32),
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct LayerUniform {
+    screen: [f32; 2],
+    time: f32,
+    pad: f32,
+    params: [f32; 16],
+}
+
 struct Range {
     tex: u32,
     start: u32,
@@ -91,6 +147,13 @@ pub struct Gfx {
     mask_pipeline: wgpu::RenderPipeline,
     rgba_pipeline: wgpu::RenderPipeline,
     pixel_pipeline: wgpu::RenderPipeline,
+    smooth_pipeline: wgpu::RenderPipeline,
+    add_mask_pipeline: wgpu::RenderPipeline,
+    add_smooth_pipeline: wgpu::RenderPipeline,
+    layer_layout: wgpu::BindGroupLayout,
+    layer_pipeline_layout: wgpu::PipelineLayout,
+    layer_sampler: wgpu::Sampler,
+    layer_programs: Vec<LayerProgram>,
     atlas_bind_group: wgpu::BindGroup,
     sprite_bind_groups: Vec<wgpu::BindGroup>,
     sprite_textures: Vec<wgpu::Texture>,
@@ -138,6 +201,7 @@ fn pipeline(
     shader: &wgpu::ShaderModule,
     fragment: &str,
     format: wgpu::TextureFormat,
+    blend: wgpu::BlendState,
 ) -> wgpu::RenderPipeline {
     let attrs =
         wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32];
@@ -163,7 +227,7 @@ fn pipeline(
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
-                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                blend: Some(blend),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
@@ -171,6 +235,19 @@ fn pipeline(
         cache: None,
     })
 }
+
+const ADDITIVE: wgpu::BlendState = wgpu::BlendState {
+    color: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Add,
+    },
+    alpha: wgpu::BlendComponent {
+        src_factor: wgpu::BlendFactor::One,
+        dst_factor: wgpu::BlendFactor::One,
+        operation: wgpu::BlendOperation::Add,
+    },
+};
 
 impl Gfx {
     pub async fn new(window: Arc<Window>, sprites: &Sprites) -> Result<Gfx, GfxError> {
@@ -235,9 +312,91 @@ impl Gfx {
             bind_group_layouts: &[Some(&bgl)],
             immediate_size: 0,
         });
-        let mask_pipeline = pipeline(device, &layout, &shader, "fs_mask", config.format);
-        let pixel_pipeline = pipeline(device, &layout, &shader, "fs_pixel", config.format);
-        let rgba_pipeline = pipeline(device, &layout, &shader, "fs_rgba", config.format);
+        let mask_pipeline = pipeline(
+            device,
+            &layout,
+            &shader,
+            "fs_mask",
+            config.format,
+            wgpu::BlendState::ALPHA_BLENDING,
+        );
+        let pixel_pipeline = pipeline(
+            device,
+            &layout,
+            &shader,
+            "fs_pixel",
+            config.format,
+            wgpu::BlendState::ALPHA_BLENDING,
+        );
+        let rgba_pipeline = pipeline(
+            device,
+            &layout,
+            &shader,
+            "fs_rgba",
+            config.format,
+            wgpu::BlendState::ALPHA_BLENDING,
+        );
+        let smooth_pipeline = pipeline(
+            device,
+            &layout,
+            &shader,
+            "fs_smooth",
+            config.format,
+            wgpu::BlendState::ALPHA_BLENDING,
+        );
+        let add_mask_pipeline =
+            pipeline(device, &layout, &shader, "fs_mask", LAYER_FORMAT, ADDITIVE);
+        let add_smooth_pipeline = pipeline(
+            device,
+            &layout,
+            &shader,
+            "fs_smooth",
+            LAYER_FORMAT,
+            ADDITIVE,
+        );
+        let layer_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("layer-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let layer_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("layer-layout"),
+                bind_group_layouts: &[Some(&layer_layout)],
+                immediate_size: 0,
+            });
+        let layer_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("layer-sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
 
         let mut sprite_textures = Vec::new();
         let mut sprite_bind_groups = Vec::new();
@@ -289,6 +448,13 @@ impl Gfx {
             mask_pipeline,
             rgba_pipeline,
             pixel_pipeline,
+            smooth_pipeline,
+            add_mask_pipeline,
+            add_smooth_pipeline,
+            layer_layout,
+            layer_pipeline_layout,
+            layer_sampler,
+            layer_programs: Vec::new(),
             atlas_bind_group,
             sprite_bind_groups,
             sprite_textures,
@@ -431,7 +597,137 @@ impl Gfx {
         }
     }
 
-    pub fn render(&mut self, clear: Color, world: &[DrawRect], ui: &[DrawRect], pixel_world: bool) {
+    fn layer_target(&self, uniform: &wgpu::Buffer) -> (wgpu::TextureView, wgpu::BindGroup) {
+        let device = &self.gpu.device;
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("layer-target"),
+            size: wgpu::Extent3d {
+                width: self.gpu.config.width.max(1),
+                height: self.gpu.config.height.max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: LAYER_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let target = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let group = bind_group(
+            device,
+            &self.layer_layout,
+            uniform,
+            &target,
+            &self.layer_sampler,
+        );
+        (target, group)
+    }
+
+    fn sync_layers(&mut self, layers: &LayerFrame) {
+        let size = (self.gpu.config.width, self.gpu.config.height);
+        self.layer_programs.retain(|p| {
+            layers
+                .shaders
+                .iter()
+                .any(|s| s.layer == p.layer && s.source == p.source)
+        });
+        for shader in layers.shaders {
+            let known = self.layer_programs.iter().any(|p| p.layer == shader.layer);
+            if !known {
+                let program = self.compile_layer(shader);
+                self.layer_programs.push(program);
+            }
+            let Some(at) = self
+                .layer_programs
+                .iter()
+                .position(|p| p.layer == shader.layer)
+            else {
+                continue;
+            };
+            if self.layer_programs[at].size != size {
+                let (target, group) = self.layer_target(&self.layer_programs[at].uniform);
+                let program = &mut self.layer_programs[at];
+                program.target = target;
+                program.group = group;
+                program.size = size;
+            }
+            let uniform = LayerUniform {
+                screen: [size.0 as f32, size.1 as f32],
+                time: layers.time,
+                pad: 0.0,
+                params: shader.params,
+            };
+            self.gpu.queue.write_buffer(
+                &self.layer_programs[at].uniform,
+                0,
+                bytemuck::bytes_of(&uniform),
+            );
+        }
+    }
+
+    fn compile_layer(&self, shader: &LayerShader) -> LayerProgram {
+        let device = &self.gpu.device;
+        if let Err(error) = shader.validate() {
+            log::error!("layer shader {}: {error}", shader.layer);
+        }
+        let source = format!("{LAYER_PRELUDE}\n{}", shader.source);
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("layer-shader"),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("layer-pipeline"),
+            layout: Some(&self.layer_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.gpu.config.format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("layer-uniform"),
+            size: std::mem::size_of::<LayerUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let (target, group) = self.layer_target(&uniform);
+        LayerProgram {
+            layer: shader.layer,
+            source: shader.source,
+            pipeline,
+            uniform,
+            target,
+            group,
+            size: (self.gpu.config.width, self.gpu.config.height),
+        }
+    }
+
+    pub fn render(
+        &mut self,
+        clear: Color,
+        world: &[DrawRect],
+        ui: &[DrawRect],
+        pixel_world: bool,
+        layers: &LayerFrame,
+    ) {
+        self.sync_layers(layers);
         self.sync_atlas();
         let dims = [
             self.gpu.config.width as f32,
@@ -448,7 +744,18 @@ impl Gfx {
         let mut ranges = Vec::new();
 
         self.batch(world, 0..world.len(), &mut ranges);
-        let world_ranges = if pixel_world { ranges.len() } else { 0 };
+        let drawn_world = ranges.len();
+        let world_ranges = if pixel_world { drawn_world } else { 0 };
+
+        let mut layer_ranges: Vec<(usize, Vec<Range>)> = Vec::new();
+        for (layer, draws) in layers.draws {
+            let Some(at) = self.layer_programs.iter().position(|p| p.layer == *layer) else {
+                continue;
+            };
+            let mut own = Vec::new();
+            self.batch(draws, 0..draws.len(), &mut own);
+            layer_ranges.push((at, own));
+        }
 
         let mut ui_order: Vec<usize> = (0..ui.len()).collect();
         ui_order.sort_by(|&a, &b| {
@@ -477,6 +784,44 @@ impl Gfx {
             .gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        for program in &self.layer_programs {
+            let own = layer_ranges
+                .iter()
+                .find(|(at, _)| std::ptr::eq(&self.layer_programs[*at], program));
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("layer-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &program.target,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            let Some((_, own)) = own else {
+                continue;
+            };
+            pass.set_vertex_buffer(0, self.vertex_buf.slice(..));
+            pass.set_index_buffer(self.index_buf.slice(..), wgpu::IndexFormat::Uint32);
+            for r in own {
+                if r.tex == 0 {
+                    pass.set_pipeline(&self.add_mask_pipeline);
+                    pass.set_bind_group(0, &self.atlas_bind_group, &[]);
+                } else if let Some(bg) = self.sprite_bind_groups.get(r.tex as usize - 1) {
+                    pass.set_pipeline(&self.add_smooth_pipeline);
+                    pass.set_bind_group(0, bg, &[]);
+                } else {
+                    continue;
+                }
+                pass.draw_indexed(r.start..r.start + r.count, 0, 0..1);
+            }
+        }
         {
             let c = clear.to_array();
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -504,7 +849,19 @@ impl Gfx {
                 pass.set_vertex_buffer(0, self.vertex_buf.slice(..));
                 pass.set_index_buffer(self.index_buf.slice(..), wgpu::IndexFormat::Uint32);
             }
-            for (i, r) in ranges.iter().enumerate() {
+            let (width, height) = (self.gpu.config.width, self.gpu.config.height);
+            for i in 0..=ranges.len() {
+                if i == drawn_world {
+                    for program in &self.layer_programs {
+                        pass.set_scissor_rect(0, 0, width, height);
+                        pass.set_pipeline(&program.pipeline);
+                        pass.set_bind_group(0, &program.group, &[]);
+                        pass.draw(0..3, 0..1);
+                    }
+                }
+                let Some(r) = ranges.get(i) else {
+                    break;
+                };
                 if r.scissor[2] == 0 || r.scissor[3] == 0 || r.count == 0 {
                     continue;
                 }
@@ -512,7 +869,9 @@ impl Gfx {
                     pass.set_pipeline(&self.mask_pipeline);
                     pass.set_bind_group(0, &self.atlas_bind_group, &[]);
                 } else if let Some(bg) = self.sprite_bind_groups.get(r.tex as usize - 1) {
-                    pass.set_pipeline(if i < world_ranges {
+                    pass.set_pipeline(if !pixel_world {
+                        &self.smooth_pipeline
+                    } else if i < world_ranges {
                         &self.pixel_pipeline
                     } else {
                         &self.rgba_pipeline

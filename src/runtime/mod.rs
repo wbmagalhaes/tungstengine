@@ -6,7 +6,7 @@ pub mod d3;
 use crate::ecs::World;
 use crate::input::Input;
 use crate::sprites::Sprites;
-use crate::ui::UI;
+use crate::ui::{PixelPerfect, UI};
 
 pub fn ui_pass(
     world: &mut World,
@@ -21,6 +21,7 @@ pub fn ui_pass(
     if let Ok(sprites) = world.resource::<Sprites>() {
         ui.set_sprites(sprites.shared());
     }
+    ui.pixel_perfect = world.resource::<PixelPerfect>().is_ok_and(|p| p.0);
     ui.begin(w, h, dt, cursor);
     ui.set_edit(edit);
     frame_ui(world, ui);

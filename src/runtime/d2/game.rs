@@ -7,7 +7,7 @@ use crate::menus::{self, GameMenu, MenuStyle};
 use crate::render::ClearColor;
 use crate::runtime::d2::app::SetupFn;
 use crate::settings::GameSettings;
-use crate::ui::UI;
+use crate::ui::{PixelPerfect, UI};
 
 use super::{App, AppControl, FrameUi, WindowConfig};
 
@@ -23,6 +23,7 @@ pub fn boot(world: &mut World, assets: GameAssets) {
     if let Some(color) = manifest.clear_color() {
         world.insert_resource(ClearColor(color));
     }
+    world.insert_resource(PixelPerfect(manifest.pixel_perfect));
     world.insert_resource(settings.volume());
     world.insert_resource(crate::rng::Rng::default());
 

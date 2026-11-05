@@ -9,7 +9,7 @@ pub const ATLAS_W: usize = 2048;
 pub const ATLAS_H: usize = 2048;
 const METRIC_PX: f32 = 32.0;
 const SPRITE_PX: usize = 256;
-pub const SPRITE_COUNT: usize = 5;
+pub const SPRITE_COUNT: usize = 6;
 const CAPSULE_RADIUS: f32 = 1.0 / 3.0;
 const MAX_PX: f32 = 256.0;
 
@@ -75,6 +75,10 @@ fn shape_alpha(shape: usize, u: f32, v: f32) -> f32 {
             let reach = 1.0 - CAPSULE_RADIUS;
             let spine = glam::Vec2::new(p.x.clamp(-reach, reach), 0.0);
             (CAPSULE_RADIUS - (p - spine).length()) / 0.04
+        }
+        5 => {
+            let falloff = (1.0 - p.length()).max(0.0);
+            falloff * falloff
         }
         _ => 0.0,
     };

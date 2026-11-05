@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use crate::ecs::prelude::*;
 use crate::particles::{ParticleEffect, Particles};
 use crate::sprites::SharedSprites;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
@@ -97,6 +98,7 @@ pub struct TextRec {
 
 #[derive(Default)]
 pub struct UI {
+    pub pixel_perfect: bool,
     sprites: SharedSprites,
     scope: u64,
     repeated_labels: std::collections::HashSet<u64>,
@@ -152,6 +154,9 @@ struct WrapCache {
 }
 
 const WRAP_CACHE_CAP: usize = 8;
+
+#[derive(Resource, Clone, Copy, Default)]
+pub struct PixelPerfect(pub bool);
 
 impl UI {
     pub fn new() -> Self {
@@ -260,6 +265,14 @@ impl UI {
         self.wheel = cursor.wheel;
         self.particles.advance(dt);
         self.draw_particles();
+    }
+
+    fn fit(&self, sprite: SpriteDraw, r: Rect) -> Rect {
+        if self.pixel_perfect {
+            sprite.pixel_rect(r)
+        } else {
+            r
+        }
     }
 
     pub fn set_sprites(&mut self, sprites: SharedSprites) {
@@ -1166,7 +1179,8 @@ impl UI {
 
     pub fn sprite(&mut self, r: Rect, sprite: impl SpriteArg, color: Color) {
         let sprite = self.art(sprite);
-        self.sprite_smooth(sprite.pixel_rect(r), sprite, color);
+        let fitted = self.fit(sprite, r);
+        self.sprite_smooth(fitted, sprite, color);
     }
 
     pub fn silhouette(&mut self, r: Rect, sprite: impl SpriteArg, color: Color) {
@@ -1248,7 +1262,7 @@ impl UI {
         quarter_turns: u8,
     ) {
         let sprite = self.art(sprite);
-        let r = sprite.pixel_rect(r);
+        let r = self.fit(sprite, r);
         let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
         let corners = [
             (-r.w / 2.0, -r.h / 2.0),
@@ -1340,7 +1354,7 @@ impl UI {
 
     pub fn sprite_outline(&mut self, r: Rect, sprite: impl SpriteArg, color: Color, width: f32) {
         let sprite = self.art(sprite);
-        let r = sprite.pixel_rect(r);
+        let r = self.fit(sprite, r);
         let c = color.to_array();
         let clip = self.current_clip();
         for k in 0..8 {
@@ -1853,6 +1867,16 @@ mod field_tests {
 #[cfg(test)]
 mod scope_tests {
     use super::*;
+
+    #[test]
+    fn only_pixel_perfect_games_snap_sprites_to_whole_scales() {
+        let sprite = SpriteDraw::image(1, [0.0, 0.0], [1.0, 1.0], [16, 16]);
+        let rect = Rect::new(0.0, 0.0, 50.0, 50.0);
+        let mut ui = UI::new();
+        assert_eq!(ui.fit(sprite, rect).w, 50.0);
+        ui.pixel_perfect = true;
+        assert_eq!(ui.fit(sprite, rect).w, 48.0);
+    }
 
     fn ids(ui: &mut UI, keys: &[u32]) -> Vec<u64> {
         ui.begin(100.0, 100.0, 0.016, Pointer::default());

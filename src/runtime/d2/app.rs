@@ -14,8 +14,12 @@ use crate::ecs::prelude::*;
 use crate::input::{Input, PadBackend};
 use crate::render::core::ClearColor;
 use crate::render::d2::gfx::Gfx;
-use crate::render::d2::{CursorWorld, View2D, WorldDraws, propagate_transforms, update_view};
+use crate::render::d2::gfx::LayerFrame;
+use crate::render::d2::{
+    CursorWorld, LayerShaders, View2D, WorldDraws, propagate_transforms, update_view,
+};
 use crate::sprites::Sprites;
+use crate::ui::PixelPerfect;
 use crate::ui::UI;
 
 #[derive(Default, Resource)]
@@ -138,7 +142,7 @@ impl App {
             window.set_fullscreen(on.then_some(winit::window::Fullscreen::Borderless(None)));
         }
 
-        let world_draws = self.draws.gather(&self.world);
+        self.draws.gather(&self.world);
         let clear = self
             .world
             .resource::<ClearColor>()
@@ -153,7 +157,15 @@ impl App {
                 }
             }
             let pixel_world = self.world.resource::<View2D>().is_ok_and(|v| v.pixel_snap);
-            gfx.render(clear, world_draws, &self.ui.draws, pixel_world);
+            let shaders = self.world.resource::<LayerShaders>().ok();
+            let shaders = shaders.map_or(&[][..], |s| s.0.as_slice());
+            let world_draws = self.draws.sorted();
+            let layers = LayerFrame {
+                shaders,
+                draws: self.draws.layered(),
+                time: self.world.elapsed(),
+            };
+            gfx.render(clear, world_draws, &self.ui.draws, pixel_world, &layers);
         }
     }
 }
@@ -161,7 +173,11 @@ impl App {
 pub fn install_core(world: &mut World) {
     world.insert_resource(AppControl::default());
     world.resource_core_mut::<Input>();
-    world.insert_resource(View2D::default());
+    let pixel_snap = world.resource::<PixelPerfect>().is_ok_and(|p| p.0);
+    world.insert_resource(View2D {
+        pixel_snap,
+        ..Default::default()
+    });
     world.insert_resource(CursorWorld::default());
     if world.resource::<ClearColor>().is_err() {
         world.insert_resource(ClearColor::default());
@@ -222,7 +238,7 @@ impl ApplicationHandler for App {
             })
             .unwrap_or_else(|_| ("game".to_string(), LogicalSize::new(1280.0, 800.0), true));
 
-        let fullscreen = if fullscreen {
+        let fullscreen = if fullscreen && !cfg!(target_arch = "wasm32") {
             Some(winit::window::Fullscreen::Borderless(None))
         } else {
             None

@@ -274,7 +274,7 @@ impl ApplicationHandler for App {
         let fullscreen = self
             .world
             .resource::<WindowConfig>()
-            .is_ok_and(|c| c.fullscreen)
+            .is_ok_and(|c| c.fullscreen && !cfg!(target_arch = "wasm32"))
             .then_some(winit::window::Fullscreen::Borderless(None));
         let attributes = Window::default_attributes()
             .with_title(title)

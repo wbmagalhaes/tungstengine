@@ -78,6 +78,45 @@ impl Default for Camera2D {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct LayerShader {
+    pub layer: i32,
+    pub source: &'static str,
+    pub params: [f32; 16],
+}
+
+impl LayerShader {
+    pub fn new(layer: i32, source: &'static str) -> Self {
+        LayerShader {
+            layer,
+            source,
+            params: [0.0; 16],
+        }
+    }
+
+    pub fn params(mut self, params: [f32; 16]) -> Self {
+        self.params = params;
+        self
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        use wgpu::naga;
+        let source = format!("{}\n{}", super::gfx::LAYER_PRELUDE, self.source);
+        let module =
+            naga::front::wgsl::parse_str(&source).map_err(|e| e.emit_to_string(&source))?;
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::default(),
+        )
+        .validate(&module)
+        .map(|_| ())
+        .map_err(|e| e.emit_to_string(&source))
+    }
+}
+
+#[derive(Resource, Clone, Debug, Default)]
+pub struct LayerShaders(pub Vec<LayerShader>);
+
 #[derive(Component, Clone, Copy, Default)]
 pub struct MainCam;
 
@@ -92,7 +131,7 @@ pub struct View2D {
 impl Default for View2D {
     fn default() -> Self {
         View2D {
-            pixel_snap: true,
+            pixel_snap: false,
             center: Vec2::ZERO,
             zoom: PIXELS_PER_UNIT,
             screen: Vec2::new(1280.0, 720.0),

@@ -9,7 +9,10 @@ A 2D and 3D game engine in Rust, built on wgpu and winit.
 - Immediate-mode UI with widgets, tooltips and pause, settings and controls menus
 - Input actions with player rebinding, gamepads and multiple players
 - Localization from TOML files
-- Minimal 2D and 3D physics: boxes, circles, gravity, tile collision and raycasts
+- 2D and 3D physics: impulse solver with soft contacts, body-to-body collision, mass, friction, sensors, sleeping, tile collision and raycasts
+- Particles: declarative effects, emitters as entities, world and screen space, loadable from TOML
+- System stages, so physics and camera run in a fixed order
+- Optional pixel-perfect mode for pixel art games
 - Scenes and prefabs, tilemaps with layers, autotiling and dual grid
 - Save and settings storage on desktop and web
 - Yarn Spinner dialog
@@ -68,8 +71,7 @@ struct Player;
 
 fn setup(world: &mut World) {
     tungstengine::boot!(world);
-    let mut actions = Actions::default();
-    actions.declare(GameAction::Jump, &[Binding::Key(KeyCode::Space)]);
+    let actions = Actions::default().declare(GameAction::Jump, &[Binding::Key(KeyCode::Space)]);
     world.load_actions(actions);
     world.insert_resource(Physics2D::with_gravity(Vec2::new(0.0, 1800.0)));
 
@@ -84,7 +86,7 @@ fn setup(world: &mut World) {
     world.insert(ground, Collider2D::rect(Vec2::new(4000.0, 160.0)));
 
     world.add_system(jump);
-    world.add_system(physics2d_step);
+    world.add_physics2d();
 }
 
 fn jump(world: &mut World) -> SysResult {
@@ -112,9 +114,75 @@ fn main() -> SysResult {
 }
 ```
 
+## Systems and stages
+
+`world.add_system` runs in `Stage::Update`. Use `add_system_to` for the others, which always run in this order, whatever order they were added: `PreUpdate`, `Update`, `Physics`, `AfterPhysics`, `Late`.
+
+```rust
+world.add_system_to(Stage::PreUpdate, read_input);
+world.add_system(movement);
+world.add_physics2d();
+world.add_system_to(Stage::AfterPhysics, pickups);
+world.add_system_to(Stage::Late, camera_follow);
+world.add_particles();
+```
+
+`add_physics2d_if` and `add_system_to_if` take a condition such as `in_state(Screen::Game)`. `query_mut` accepts any mix of `&T` and `&mut T`.
+
+## Physics
+
+`Physics2D::earth()` gives a gravity that feels right at the default scale, and `physics.jump_speed(height)` turns a jump height into a speed. Bodies do not rotate.
+
+```rust
+let body = Body2D::default().friction(0.4).sleepy();
+let wall = Collider2D::between(min, max);
+let trigger = Collider2D::circle(1.0).offset(offset).sensor();
+```
+
+Sensors report through `overlaps` and block nothing. Sleeping is opt-in with `.sleepy()`: a resting body costs almost nothing and wakes when hit or when its velocity is set. 3D has the same API with `Body3D`, `Collider3D` and `add_physics3d`.
+
+## Particles
+
+Effects are plain data with a builder, and can be loaded with `ParticleEffect::parse` from TOML.
+
+```rust
+let sparkle = ParticleEffect::new()
+    .count(18)
+    .life((0.4, 0.8))
+    .speed((3.0, 7.0))
+    .sprite(Sprite::CAPSULE)
+    .align();
+
+emit_burst(world, pos, sparkle.clone());
+world.insert(player, ParticleEmitter::stream(dust).offset(feet));
+ui.burst(&sparkle, (x, y), z);
+```
+
+`emit_burst` and `ParticleEmitter` work in the world and need `world.add_particles()`. `ui.burst` works in screen pixels and needs no system.
+
+## Sprites
+
+`ui.sprite(rect, GameArt::Chest, color)` takes a sprite enum, a name or a `Sprite`. Use `ui.art(key)` or `world.art(key)` to get a `SpriteDraw`. Each `World` resolves its own sprites, and missing ones draw as a magenta tile.
+
+Set `pixel_perfect = true` in `manifest.toml` for pixel art: sprites land on whole pixels and scale by whole numbers. Without it, sprites scale and filter smoothly.
+
+## UI lists
+
+Widgets get their identity from their label, so repeated labels need a key. Debug builds warn when a label repeats in a frame.
+
+```rust
+for item in &shop {
+    ui.scope(item.id, |ui| ui.button(rect, "Buy"));
+}
+```
+
+## Testing
+
+`runtime::d2::Headless` and `runtime::d3::Headless` run a full game without a window, so tests can press keys, advance frames and read the world and on-screen text.
+
 ## Web builds
 
-Run `scripts/build-web.sh` from the game folder. It needs `wasm-bindgen-cli`. The page comes from `web/` and a game can replace `index.html`, `style.css` or `wrapper.html` in its own `web/` folder, using `{{game}}` to place the canvas.
+Run `scripts/build-web.sh` from the game folder. It needs `wasm-bindgen-cli`, and uses `wasm-opt` when installed. The page comes from `web/` and a game can replace `index.html`, `style.css` or `wrapper.html` in its own `web/` folder, using `{{game}}` to place the canvas.
 
 ## Development
 

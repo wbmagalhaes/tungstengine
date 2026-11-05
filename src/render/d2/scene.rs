@@ -5,7 +5,7 @@ use crate::ecs::{Baked, render_offset};
 use crate::particles::Particles;
 use crate::ui::DrawRect;
 
-use super::components::{Camera2D, MainCam, PIXELS_PER_UNIT, SpriteRenderer, View2D};
+use super::components::{Camera2D, LayerShaders, MainCam, PIXELS_PER_UNIT, SpriteRenderer, View2D};
 
 pub fn propagate_transforms(world: &mut World) {
     let roots: Vec<(Entity, Mat4)> = world
@@ -66,6 +66,7 @@ pub struct WorldDraws {
     order: Vec<(DrawKey, u32)>,
     rects: Vec<DrawRect>,
     sorted: Vec<DrawRect>,
+    layered: Vec<(i32, Vec<DrawRect>)>,
 }
 
 impl WorldDraws {
@@ -80,10 +81,31 @@ impl WorldDraws {
                 .then(a.2.cmp(&b.2))
                 .then(i.cmp(j))
         });
-        let rects = &self.rects;
-        self.sorted
-            .extend(self.order.iter().map(|&(_, i)| rects[i as usize]));
+        let shaders = world.resource::<LayerShaders>().ok();
+        let shaded = |layer: i32| shaders.is_some_and(|s| s.0.iter().any(|l| l.layer == layer));
+        for (_, list) in &mut self.layered {
+            list.clear();
+        }
+        for &((layer, _, _), i) in &self.order {
+            let rect = self.rects[i as usize];
+            if !shaded(layer) {
+                self.sorted.push(rect);
+                continue;
+            }
+            match self.layered.iter_mut().find(|(l, _)| *l == layer) {
+                Some((_, list)) => list.push(rect),
+                None => self.layered.push((layer, vec![rect])),
+            }
+        }
         &self.sorted
+    }
+
+    pub fn sorted(&self) -> &[DrawRect] {
+        &self.sorted
+    }
+
+    pub fn layered(&self) -> &[(i32, Vec<DrawRect>)] {
+        &self.layered
     }
 }
 
@@ -271,6 +293,21 @@ mod tests {
         world.insert(e, GlobalTransform(m));
         world.insert(e, SpriteRenderer::default());
         assert_eq!(gather_world(&world).len(), 1);
+    }
+
+    #[test]
+    fn shaded_layers_leave_the_main_list() {
+        let mut world = World::new();
+        world.insert_resource(view(false));
+        world.insert_resource(LayerShaders(vec![super::super::LayerShader::new(5, "")]));
+        for layer in [0, 5, 5] {
+            let e = world.spawn();
+            world.insert(e, GlobalTransform::default());
+            world.insert(e, SpriteRenderer::default().layer(layer));
+        }
+        let mut draws = WorldDraws::default();
+        assert_eq!(draws.gather(&world).len(), 1);
+        assert_eq!(draws.layered()[0].1.len(), 2);
     }
 
     #[test]

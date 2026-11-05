@@ -71,6 +71,7 @@ impl Sprite {
     pub const TRIANGLE: Sprite = Sprite(2);
     pub const HEXAGON: Sprite = Sprite(3);
     pub const CAPSULE: Sprite = Sprite(4);
+    pub const SOFT: Sprite = Sprite(5);
 
     pub fn from_name(name: &str) -> Option<Sprite> {
         match name {
@@ -79,12 +80,13 @@ impl Sprite {
             "triangle" => Some(Sprite::TRIANGLE),
             "hexagon" => Some(Sprite::HEXAGON),
             "capsule" => Some(Sprite::CAPSULE),
+            "soft" => Some(Sprite::SOFT),
             _ => None,
         }
     }
 
     pub fn builtin_name(self) -> Option<&'static str> {
-        ["rect", "circle", "triangle", "hexagon", "capsule"]
+        ["rect", "circle", "triangle", "hexagon", "capsule", "soft"]
             .get(self.0 as usize)
             .copied()
     }
