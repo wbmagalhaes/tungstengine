@@ -10,6 +10,7 @@ impl Input {
         if pressed {
             if self.keys_down.insert(key) {
                 self.keys_pressed.insert(key);
+                self.keys_struck.insert(key);
                 self.key_held_time.insert(key, 0.0);
             }
         } else if self.keys_down.remove(&key) {
@@ -53,6 +54,7 @@ impl Input {
 
     pub fn consume_key(&mut self, key: KeyCode) {
         self.keys_pressed.remove(&key);
+        self.keys_struck.remove(&key);
     }
 
     pub fn key_released(&self, key: KeyCode) -> bool {

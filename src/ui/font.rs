@@ -7,7 +7,8 @@ pub const ATLAS_W: usize = 2048;
 pub const ATLAS_H: usize = 2048;
 const METRIC_PX: f32 = 32.0;
 const SPRITE_PX: usize = 256;
-pub const SPRITE_COUNT: usize = 4;
+pub const SPRITE_COUNT: usize = 5;
+const CAPSULE_RADIUS: f32 = 1.0 / 3.0;
 const MAX_PX: f32 = 256.0;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Hash)]
@@ -67,6 +68,11 @@ fn shape_alpha(shape: usize, u: f32, v: f32) -> f32 {
             } else {
                 0.0
             }
+        }
+        4 => {
+            let reach = 1.0 - CAPSULE_RADIUS;
+            let spine = glam::Vec2::new(p.x.clamp(-reach, reach), 0.0);
+            (CAPSULE_RADIUS - (p - spine).length()) / 0.04
         }
         _ => 0.0,
     };
@@ -322,6 +328,14 @@ pub fn white_uv() -> ([f32; 2], [f32; 2]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capsule_is_a_rounded_horizontal_bar() {
+        assert_eq!(shape_alpha(4, 0.5, 0.5), 1.0);
+        assert_eq!(shape_alpha(4, 0.05, 0.5), 1.0);
+        assert_eq!(shape_alpha(4, 0.5, 0.05), 0.0);
+        assert_eq!(shape_alpha(4, 0.01, 0.35), 0.0);
+    }
 
     #[test]
     fn rasterizes_at_requested_size() {

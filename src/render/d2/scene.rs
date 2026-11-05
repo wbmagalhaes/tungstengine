@@ -2,9 +2,10 @@ use glam::{Mat4, Vec2, Vec3};
 
 use crate::ecs::prelude::*;
 use crate::ecs::{Baked, render_offset};
+use crate::particles::Particles;
 use crate::ui::DrawRect;
 
-use super::components::{Camera2D, MainCam, SpriteRenderer, View2D};
+use super::components::{Camera2D, MainCam, PIXELS_PER_UNIT, SpriteRenderer, View2D};
 
 pub fn propagate_transforms(world: &mut World) {
     let roots: Vec<(Entity, Mat4)> = world
@@ -44,7 +45,7 @@ pub fn update_view(world: &mut World, screen: Vec2) {
     let cam = world
         .query::<(&GlobalTransform, &Camera2D, &MainCam)>()
         .next()
-        .map(|(_, g, c, _)| (g.position().truncate(), c.zoom));
+        .map(|(_, g, c, _)| (g.position().truncate(), c.zoom * PIXELS_PER_UNIT));
     if let Ok(view) = world.resource_mut::<View2D>() {
         if let Some((center, zoom)) = cam {
             view.center = if view.pixel_snap {
@@ -127,6 +128,45 @@ pub fn gather_world(world: &World) -> Vec<DrawRect> {
                 silhouette: false,
             },
         ));
+    }
+    if let Ok(particles) = world.resource::<Particles>() {
+        for p in particles.iter() {
+            if (p.pos - view.center).abs().cmpgt(half).any() {
+                continue;
+            }
+            let quad = p.corners().map(|c| {
+                let screen = vt.transform_point3(c.extend(0.0)).truncate();
+                if view.pixel_snap && !p.align {
+                    screen.round().to_array()
+                } else {
+                    screen.to_array()
+                }
+            });
+            let min = quad
+                .iter()
+                .fold([f32::MAX; 2], |m, c| [m[0].min(c[0]), m[1].min(c[1])]);
+            let max = quad
+                .iter()
+                .fold([f32::MIN; 2], |m, c| [m[0].max(c[0]), m[1].max(c[1])]);
+            let mut color = p.color;
+            color.a = p.current_alpha();
+            items.push((
+                (p.layer, p.pos.y),
+                DrawRect {
+                    min,
+                    max,
+                    uv_min: p.draw.uv_min,
+                    uv_max: p.draw.uv_max,
+                    color: color.to_array(),
+                    z: 0.0,
+                    tex: p.draw.tex,
+                    clip,
+                    quad: Some(quad),
+                    uvs: None,
+                    silhouette: false,
+                },
+            ));
+        }
     }
     items.sort_by(|a, b| {
         a.0.0.cmp(&b.0.0).then(

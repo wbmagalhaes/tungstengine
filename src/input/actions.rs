@@ -191,7 +191,7 @@ impl Input {
 
     pub fn binding_pressed(&self, binding: Binding) -> bool {
         match binding {
-            Binding::Key(k) => self.keys_pressed.contains(&k),
+            Binding::Key(k) => self.keys_struck.contains(&k),
             Binding::Mouse(b) => self.mouse_pressed.contains(&b),
             _ => false,
         }

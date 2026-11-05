@@ -11,10 +11,14 @@ pub enum Shape2D {
     Circle(f32),
 }
 
+pub const EARTH_GRAVITY: f32 = 9.8;
+pub const UNITS_PER_METER: f32 = 3.0;
+
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Collider2D {
     pub shape: Shape2D,
     pub offset: Vec2,
+    pub sensor: bool,
 }
 
 impl Collider2D {
@@ -22,6 +26,7 @@ impl Collider2D {
         Collider2D {
             shape: Shape2D::Box(size),
             offset: Vec2::ZERO,
+            sensor: false,
         }
     }
 
@@ -29,7 +34,13 @@ impl Collider2D {
         Collider2D {
             shape: Shape2D::Circle(radius),
             offset: Vec2::ZERO,
+            sensor: false,
         }
+    }
+
+    pub fn sensor(mut self) -> Self {
+        self.sensor = true;
+        self
     }
 
     fn reach(&self) -> f32 {
@@ -72,6 +83,14 @@ pub struct Physics2D {
 }
 
 impl Physics2D {
+    pub fn earth() -> Self {
+        Self::with_gravity(Vec2::Y * EARTH_GRAVITY * UNITS_PER_METER)
+    }
+
+    pub fn jump_speed(&self, height: f32) -> f32 {
+        (2.0 * self.gravity.length() * height).sqrt()
+    }
+
     pub fn with_gravity(gravity: Vec2) -> Self {
         Physics2D {
             gravity,
@@ -144,7 +163,7 @@ pub fn push_out(a: Placed, b: Placed) -> Option<Vec2> {
 fn solids(world: &World) -> Vec<(Entity, Placed)> {
     world
         .query::<(&Collider2D, &Transform)>()
-        .filter(|(e, _, _)| !world.has::<Body2D>(*e))
+        .filter(|(e, c, _)| !c.sensor && !world.has::<Body2D>(*e))
         .map(|(e, c, t)| (e, c.placed(t)))
         .collect()
 }
@@ -281,6 +300,7 @@ pub fn raycast2d(world: &World, origin: Vec2, dir: Vec2, max: f32) -> Option<Ray
     let dir = dir.normalize_or_zero();
     world
         .query::<(&Collider2D, &Transform)>()
+        .filter(|(_, c, _)| !c.sensor)
         .filter_map(|(entity, c, t)| {
             let (shape, pos) = c.placed(t);
             let distance = match shape {
@@ -298,8 +318,8 @@ pub fn raycast2d(world: &World, origin: Vec2, dir: Vec2, max: f32) -> Option<Ray
 
 pub mod prelude {
     pub use super::{
-        Body2D, Collider2D, Physics2D, RayHit2D, Shape2D, TileCollider, overlaps, physics2d_step,
-        raycast2d,
+        Body2D, Collider2D, EARTH_GRAVITY, Physics2D, RayHit2D, Shape2D, TileCollider,
+        UNITS_PER_METER, overlaps, physics2d_step, raycast2d,
     };
 }
 
@@ -438,6 +458,28 @@ mod tests {
             physics2d_step(&mut w).unwrap();
         }
         assert!((pos(&w, b).y - 2.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn sensors_overlap_but_do_not_block() {
+        let mut w = world(Vec2::new(0.0, 10.0));
+        let b = body(&mut w, Vec2::ZERO);
+        let sensor = Collider2D::rect(Vec2::new(10.0, 1.0)).sensor();
+        let s = spawn(&mut w, Vec2::new(0.0, 3.0), sensor);
+        for _ in 0..40 {
+            physics2d_step(&mut w).unwrap();
+        }
+        assert!(pos(&w, b).y > 3.0);
+        assert!(overlaps(&w, Shape2D::Circle(0.5), Vec2::new(0.0, 3.0)).contains(&s));
+        assert!(raycast2d(&w, Vec2::new(0.0, 1.0), Vec2::Y, 3.0).is_none());
+    }
+
+    #[test]
+    fn jump_speed_reaches_the_requested_height() {
+        let physics = Physics2D::earth();
+        let v = physics.jump_speed(3.0);
+        let height = v * v / (2.0 * physics.gravity.y);
+        assert!((height - 3.0).abs() < 1e-3);
     }
 
     #[test]

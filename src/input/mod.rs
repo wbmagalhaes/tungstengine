@@ -31,6 +31,7 @@ pub struct Input {
     mouse_released: HashSet<MouseButton>,
     keys_down: HashSet<KeyCode>,
     keys_pressed: HashSet<KeyCode>,
+    keys_struck: HashSet<KeyCode>,
     keys_released: HashSet<KeyCode>,
     key_held_time: HashMap<KeyCode, f32>,
 }
@@ -41,6 +42,7 @@ impl Input {
         self.keys_released.extend(self.keys_down.drain());
         self.mouse_pressed.clear();
         self.keys_pressed.clear();
+        self.keys_struck.clear();
         self.key_held_time.clear();
         self.typed.clear();
         self.scroll = 0.0;
@@ -51,6 +53,7 @@ impl Input {
         self.mouse_pressed.clear();
         self.mouse_released.clear();
         self.keys_pressed.clear();
+        self.keys_struck.clear();
         self.keys_released.clear();
         self.typed.clear();
         self.scroll = 0.0;

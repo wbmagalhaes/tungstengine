@@ -323,17 +323,18 @@ mod tests {
     }
 
     fn input() -> Input {
-        let mut i = Input::default();
-        i.actions
-            .declare(
-                Act::Jump,
-                &[Binding::Key(KeyCode::Space), Binding::Pad(PadButton::South)],
-            )
-            .declare(
-                Act::Right,
-                &[Binding::PadAxis(PadAxis::LeftX, AxisDir::Positive)],
-            );
-        i
+        Input {
+            actions: Actions::default()
+                .declare(
+                    Act::Jump,
+                    &[Binding::Key(KeyCode::Space), Binding::Pad(PadButton::South)],
+                )
+                .declare(
+                    Act::Right,
+                    &[Binding::PadAxis(PadAxis::LeftX, AxisDir::Positive)],
+                ),
+            ..Default::default()
+        }
     }
 
     #[test]

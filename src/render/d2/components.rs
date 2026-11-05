@@ -4,6 +4,8 @@ use crate::color::Color;
 use crate::ecs::prelude::*;
 use crate::ui::{Sprite, SpriteDraw};
 
+pub const PIXELS_PER_UNIT: f32 = 64.0;
+
 #[derive(Component, Clone, Copy)]
 pub struct SpriteRenderer {
     pub sprite: SpriteDraw,
@@ -72,7 +74,7 @@ pub struct Camera2D {
 
 impl Default for Camera2D {
     fn default() -> Self {
-        Camera2D { zoom: 48.0 }
+        Camera2D { zoom: 1.0 }
     }
 }
 
@@ -92,7 +94,7 @@ impl Default for View2D {
         View2D {
             pixel_snap: true,
             center: Vec2::ZERO,
-            zoom: 48.0,
+            zoom: PIXELS_PER_UNIT,
             screen: Vec2::new(1280.0, 720.0),
         }
     }

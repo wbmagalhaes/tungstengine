@@ -30,6 +30,20 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (f32, f32, f32) {
     (r + m, g + m, b + m)
 }
 
+impl serde::Serialize for Color {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let alpha = (self.a.clamp(0.0, 1.0) * 255.0).round() as u8;
+        serializer.serialize_str(&format!("#{}{alpha:02x}", self.to_hex()))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Color {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Ok(Color::from_name(&text).unwrap_or_else(|| Color::hex(&text)))
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Color {
     pub r: f32,

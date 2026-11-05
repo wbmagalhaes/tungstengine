@@ -16,7 +16,7 @@ pub struct DrawRect {
     pub silhouette: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SpriteDraw {
     pub uv_min: [f32; 2],
     pub uv_max: [f32; 2],
@@ -70,6 +70,7 @@ impl Sprite {
     pub const CIRCLE: Sprite = Sprite(1);
     pub const TRIANGLE: Sprite = Sprite(2);
     pub const HEXAGON: Sprite = Sprite(3);
+    pub const CAPSULE: Sprite = Sprite(4);
 
     pub fn from_name(name: &str) -> Option<Sprite> {
         match name {
@@ -77,6 +78,7 @@ impl Sprite {
             "circle" => Some(Sprite::CIRCLE),
             "triangle" => Some(Sprite::TRIANGLE),
             "hexagon" => Some(Sprite::HEXAGON),
+            "capsule" => Some(Sprite::CAPSULE),
             _ => None,
         }
     }
