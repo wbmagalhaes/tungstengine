@@ -45,6 +45,15 @@ impl Collider2D {
         }
     }
 
+    pub fn between(min: Vec2, max: Vec2) -> Self {
+        Self::rect(max - min).offset((min + max) / 2.0)
+    }
+
+    pub fn offset(mut self, offset: Vec2) -> Self {
+        self.offset = offset;
+        self
+    }
+
     pub fn sensor(mut self) -> Self {
         self.sensor = true;
         self
@@ -286,6 +295,10 @@ fn blocked_tiles(map: &Tilemap) -> Vec<Placed> {
 impl World {
     pub fn add_physics2d(&mut self) {
         self.add_system_to(Stage::Physics, physics2d_step);
+    }
+
+    pub fn add_physics2d_if(&mut self, condition: impl Fn(&World) -> bool + 'static) {
+        self.add_system_to_if(Stage::Physics, condition, physics2d_step);
     }
 }
 
@@ -617,7 +630,7 @@ mod tests {
             Vec2::new(3.0, 0.0),
             Collider2D::rect(Vec2::new(1.0, 100.0)),
         );
-        w.get_mut::<Body2D>(pusher).unwrap().mass = 2.0;
+        w.get_mut::<Body2D>(pusher).unwrap().mass = 100.0;
         for _ in 0..20 {
             w.get_mut::<Body2D>(pusher).unwrap().velocity.x = 20.0;
             physics2d_step(&mut w).unwrap();
@@ -715,6 +728,61 @@ mod tests {
             physics2d_step(&mut w).unwrap();
         }
         assert!(center(&w).abs() < 0.3, "{}", center(&w));
+    }
+
+    #[test]
+    fn colliders_build_from_corners() {
+        let c = Collider2D::between(Vec2::new(-1.0, 0.0), Vec2::new(3.0, 2.0)).sensor();
+        assert_eq!(c.shape, Shape2D::Box(Vec2::new(4.0, 2.0)));
+        assert_eq!(c.offset, Vec2::new(1.0, 1.0));
+        assert!(c.sensor);
+    }
+
+    #[test]
+    fn a_huge_body_collides_with_small_ones() {
+        let mut w = world(Vec2::new(0.0, 10.0));
+        spawn(
+            &mut w,
+            Vec2::new(0.0, 10.0),
+            Collider2D::rect(Vec2::new(100.0, 1.0)),
+        );
+        let mut small = Vec::new();
+        for i in 0..20 {
+            let e = spawn(
+                &mut w,
+                Vec2::new(i as f32 - 10.0, 9.2),
+                Collider2D::circle(0.2),
+            );
+            w.insert(e, Body2D::default());
+            small.push(e);
+        }
+        let big = spawn(
+            &mut w,
+            Vec2::new(0.0, 3.0),
+            Collider2D::rect(Vec2::new(30.0, 2.0)),
+        );
+        w.insert(big, Body2D::default());
+        for _ in 0..40 {
+            physics2d_step(&mut w).unwrap();
+        }
+        assert!(pos(&w, big).y < 8.3, "{}", pos(&w, big).y);
+    }
+
+    #[test]
+    fn very_fast_small_bodies_do_not_pass_through_each_other() {
+        let mut w = world(Vec2::ZERO);
+        let grain = |w: &mut World, x: f32, speed: f32| {
+            let e = spawn(w, Vec2::new(x, 0.0), Collider2D::circle(0.05));
+            w.insert(e, Body2D::default());
+            w.get_mut::<Body2D>(e).unwrap().velocity.x = speed;
+            e
+        };
+        let a = grain(&mut w, -3.0, 300.0);
+        let b = grain(&mut w, 3.0, -300.0);
+        for _ in 0..3 {
+            physics2d_step(&mut w).unwrap();
+        }
+        assert!(pos(&w, a).x < pos(&w, b).x);
     }
 
     #[test]

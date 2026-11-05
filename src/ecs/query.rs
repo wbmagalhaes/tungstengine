@@ -40,15 +40,16 @@ macro_rules! impl_query_shared {
     };
 }
 
-pub trait QueryTail<'w> {
+pub trait QueryParam<'w> {
     type Item;
     type Column;
     fn id() -> TypeId;
     fn column(any: &'w mut dyn Any) -> Option<Self::Column>;
     fn fetch(column: &mut Self::Column, e: Entity) -> Option<Self::Item>;
+    fn walk(column: Self::Column) -> impl Iterator<Item = (Entity, Self::Item)>;
 }
 
-impl<'w, T: Component> QueryTail<'w> for &'w T {
+impl<'w, T: Component> QueryParam<'w> for &'w T {
     type Item = &'w T;
     type Column = &'w FastMap<Entity, T>;
 
@@ -63,6 +64,10 @@ impl<'w, T: Component> QueryTail<'w> for &'w T {
     fn fetch(column: &mut Self::Column, e: Entity) -> Option<Self::Item> {
         column.get(&e)
     }
+
+    fn walk(column: Self::Column) -> impl Iterator<Item = (Entity, Self::Item)> {
+        column.iter().map(|(&e, v)| (e, v))
+    }
 }
 
 pub struct MutColumn<'w, T> {
@@ -70,7 +75,7 @@ pub struct MutColumn<'w, T> {
     world: PhantomData<&'w mut FastMap<Entity, T>>,
 }
 
-impl<'w, T: Component> QueryTail<'w> for &'w mut T {
+impl<'w, T: Component> QueryParam<'w> for &'w mut T {
     type Item = &'w mut T;
     type Column = MutColumn<'w, T>;
 
@@ -92,26 +97,31 @@ impl<'w, T: Component> QueryTail<'w> for &'w mut T {
         // two returned references point at the same value.
         unsafe { (*column.map).get_mut(&e) }
     }
+
+    fn walk(column: Self::Column) -> impl Iterator<Item = (Entity, Self::Item)> {
+        // SAFETY: as in `fetch`; the column is exclusive to this iterator for 'w.
+        unsafe { (*column.map).iter_mut() }.map(|(&e, v)| (e, v))
+    }
 }
 
 macro_rules! impl_query_mut {
     ($head:ident $(, $tail:ident)*) => {
-        impl<'w, $head: Component $(, $tail: QueryTail<'w>)*> QueryMut<'w>
-            for (&'w mut $head, $($tail,)*)
+        impl<'w, $head: QueryParam<'w> $(, $tail: QueryParam<'w>)*> QueryMut<'w>
+            for ($head, $($tail,)*)
         {
-            type Item = (Entity, &'w mut $head, $($tail::Item,)*);
+            type Item = (Entity, $head::Item, $($tail::Item,)*);
 
             #[allow(non_snake_case)]
             fn run(world: &'w mut World) -> impl Iterator<Item = Self::Item> {
                 let [$head $(, $tail)*] = world
-                    .columns_disjoint_any_mut([TypeId::of::<$head>() $(, $tail::id())*]);
+                    .columns_disjoint_any_mut([$head::id() $(, $tail::id())*]);
                 let cols = (move || {
-                    let $head = $head?.downcast_mut::<FastMap<Entity, $head>>()?;
+                    let $head = $head::column($head?)?;
                     $( let $tail = $tail::column($tail?)?; )*
                     Some(($head, $($tail,)*))
                 })();
                 cols.into_iter().flat_map(|($head, $(mut $tail,)*)| {
-                    $head.iter_mut().filter_map(move |(&e, hv)| {
+                    $head::walk($head).filter_map(move |(e, hv)| {
                         Some((e, hv, $( $tail::fetch(&mut $tail, e)?, )*))
                     })
                 })
@@ -173,6 +183,26 @@ mod tests {
         }
         let sum: i32 = world.query::<(&A, &B)>().map(|(_, a, b)| a.0 - b.0).sum();
         assert_eq!(sum, 10);
+    }
+
+    #[test]
+    fn query_mut_can_lead_with_a_shared_column() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.insert(e, A(2));
+        world.insert(e, B(3));
+        for (_, a, b) in world.query_mut::<(&A, &mut B)>() {
+            b.0 += a.0;
+        }
+        assert_eq!(world.get::<B>(e).unwrap().0, 5);
+    }
+
+    #[test]
+    fn repeating_a_component_returns_nothing_instead_of_aliasing() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.insert(e, A(1));
+        assert_eq!(world.query_mut::<(&mut A, &A)>().count(), 0);
     }
 
     #[test]

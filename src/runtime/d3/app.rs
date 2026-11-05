@@ -4,16 +4,16 @@ use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
-use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowId};
 
 use glam::{Mat4, Vec3};
 
 use crate::animation::Animator;
 use crate::ecs::prelude::*;
-use crate::ui::{EditInput, UI};
+use crate::ui::UI;
 
-use crate::input::{Input, PadBackend, Pointer};
+use crate::input::{Input, PadBackend};
 use crate::render::d3::gfx::Gfx;
 use crate::render::d3::{
     Camera, CameraView, CursorRay, Faces, Hovered, Lighting, MainCam, MeshRegistry, Outline,
@@ -52,7 +52,6 @@ pub struct App {
     gfx: Option<Gfx>,
     last: Instant,
     pads: Option<PadBackend>,
-    clipboard: Option<arboard::Clipboard>,
 }
 
 fn main_camera(world: &World) -> Option<(Mat4, f32, f32, f32)> {
@@ -172,6 +171,51 @@ fn gather_scene(world: &World) -> Scene {
     }
 }
 
+pub fn install_core(world: &mut World) {
+    world.insert_resource(AppControl::default());
+    world.resource_core_mut::<Input>();
+    world.insert_resource(CursorRay::default());
+    world.insert_resource(Transition::default());
+    if world.resource::<MeshRegistry>().is_err() {
+        world.insert_resource(MeshRegistry::new());
+    }
+    if world.resource::<ShaderRegistry>().is_err() {
+        world.insert_resource(ShaderRegistry::new());
+    }
+    if world.resource::<PostRegistry>().is_err() {
+        world.insert_resource(PostRegistry::default());
+    }
+    if world.resource::<PostChain>().is_err() {
+        world.insert_resource(PostChain::default());
+    }
+    if world.resource::<crate::sprites::Sprites>().is_err() {
+        world.insert_resource(crate::sprites::Sprites::default());
+    }
+}
+
+pub fn tick(world: &mut World, ui: &mut UI, frame_ui: FrameUi, w: f32, h: f32, dt: f32) {
+    if let Ok(input) = world.resource_mut::<Input>() {
+        input.tick(dt);
+    }
+    if let Ok(time) = world.resource_mut::<Time>() {
+        time.advance(dt);
+    }
+    if let Ok(transition) = world.resource_mut::<Transition>() {
+        transition.advance(dt);
+    }
+    let cursor = world
+        .resource::<Input>()
+        .map(|i| i.cursor)
+        .unwrap_or((0.0, 0.0));
+    update_cursor_ray(world, cursor, w, h);
+    world.run();
+    crate::runtime::ui_pass(world, ui, frame_ui, (w, h, dt));
+    if let Ok(input) = world.resource_mut::<Input>() {
+        input.end_frame();
+    }
+    propagate_transforms(world);
+}
+
 fn update_cursor_ray(world: &mut World, cursor: (f32, f32), w: f32, h: f32) {
     let Some((cam_world, fov, near, far)) = main_camera(world) else {
         return;
@@ -197,25 +241,7 @@ impl App {
     }
 
     pub fn new(mut world: World, frame_ui: FrameUi) -> Self {
-        world.insert_resource(AppControl::default());
-        world.resource_core_mut::<Input>();
-        world.insert_resource(CursorRay::default());
-        world.insert_resource(Transition::default());
-        if world.resource::<MeshRegistry>().is_err() {
-            world.insert_resource(MeshRegistry::new());
-        }
-        if world.resource::<ShaderRegistry>().is_err() {
-            world.insert_resource(ShaderRegistry::new());
-        }
-        if world.resource::<PostRegistry>().is_err() {
-            world.insert_resource(PostRegistry::default());
-        }
-        if world.resource::<PostChain>().is_err() {
-            world.insert_resource(PostChain::default());
-        }
-        if world.resource::<crate::sprites::Sprites>().is_err() {
-            world.insert_resource(crate::sprites::Sprites::default());
-        }
+        install_core(&mut world);
 
         App {
             world,
@@ -225,7 +251,6 @@ impl App {
             gfx: None,
             last: Instant::now(),
             pads: PadBackend::new(),
-            clipboard: arboard::Clipboard::new().ok(),
         }
     }
 
@@ -335,7 +360,6 @@ impl ApplicationHandler for App {
                 let dt = (now - self.last).as_secs_f32().min(0.1);
                 self.last = now;
 
-                self.with_input(|input| input.tick(dt));
                 if let Some(pads) = self.pads.as_mut()
                     && let Ok(input) = self.world.resource_mut::<Input>()
                 {
@@ -351,80 +375,8 @@ impl ApplicationHandler for App {
                         .set_fullscreen(on.then_some(winit::window::Fullscreen::Borderless(None)));
                 }
 
-                if let Ok(time) = self.world.resource_mut::<Time>() {
-                    time.advance(dt);
-                }
-                if let Ok(transition) = self.world.resource_mut::<Transition>() {
-                    transition.advance(dt);
-                }
-
                 let (w, h) = self.gfx.as_ref().map(Gfx::size).unwrap_or((0.0, 0.0));
-                let pointer_cursor = self
-                    .world
-                    .resource::<Input>()
-                    .map(|i| i.cursor)
-                    .unwrap_or((0.0, 0.0));
-                update_cursor_ray(&mut self.world, pointer_cursor, w, h);
-
-                self.world.run();
-
-                let (cursor, mut edit, want_paste) = match self.world.resource::<Input>() {
-                    Ok(input) => {
-                        let cursor = input.pointer();
-
-                        let ctrl = input.key_held(KeyCode::ControlLeft)
-                            || input.key_held(KeyCode::ControlRight);
-
-                        let edit = EditInput {
-                            typed: if ctrl {
-                                String::new()
-                            } else {
-                                input.typed.clone()
-                            },
-                            backspace: input.key_pressed(KeyCode::Backspace),
-                            delete: input.key_pressed(KeyCode::Delete),
-                            enter: input.key_pressed(KeyCode::Enter),
-                            left: input.key_pressed(KeyCode::ArrowLeft),
-                            right: input.key_pressed(KeyCode::ArrowRight),
-                            up: input.key_pressed(KeyCode::ArrowUp),
-                            down: input.key_pressed(KeyCode::ArrowDown),
-                            home: input.key_pressed(KeyCode::Home),
-                            end: input.key_pressed(KeyCode::End),
-                            shift: input.key_held(KeyCode::ShiftLeft)
-                                || input.key_held(KeyCode::ShiftRight),
-                            ctrl,
-                            copy: ctrl && input.key_pressed(KeyCode::KeyC),
-                            cut: ctrl && input.key_pressed(KeyCode::KeyX),
-                            paste: None,
-                        };
-
-                        let want_paste = ctrl && input.key_pressed(KeyCode::KeyV);
-
-                        (cursor, edit, want_paste)
-                    }
-                    Err(_) => (Pointer::default(), EditInput::default(), false),
-                };
-
-                if want_paste
-                    && let Some(cb) = self.clipboard.as_mut()
-                    && let Ok(text) = cb.get_text()
-                {
-                    edit.paste = Some(text);
-                }
-
-                self.ui.begin(w, h, dt, cursor);
-                self.ui.set_edit(edit);
-                let frame_ui = self.frame_ui;
-                frame_ui(&mut self.world, &mut self.ui);
-                self.ui.finish();
-
-                if let Some(text) = self.ui.take_clipboard()
-                    && let Some(cb) = self.clipboard.as_mut()
-                {
-                    let _ = cb.set_text(text);
-                }
-
-                self.with_input(|input| input.end_frame());
+                tick(&mut self.world, &mut self.ui, self.frame_ui, w, h, dt);
 
                 let exit = self
                     .world
@@ -436,7 +388,6 @@ impl ApplicationHandler for App {
                     event_loop.exit();
                 }
 
-                propagate_transforms(&mut self.world);
                 let mut scene = gather_scene(&self.world);
                 if let Ok(clear) = self.world.resource::<crate::render::ClearColor>() {
                     scene.lighting.background = clear.0;

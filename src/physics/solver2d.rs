@@ -14,8 +14,10 @@ const SLEEP_SPEED: f32 = 0.3;
 const SLEEP_TIME: f32 = 0.4;
 const WAKE_SPEED: f32 = 1.5;
 const MAX_CELLS_PER_BODY: usize = 8;
-const MAX_BODY_REACH: f32 = 2.0;
+const MAX_SWEEP_SAMPLES: u32 = 64;
 const WALL_KEY: u64 = 1 << 63;
+const MAX_WALL_DEPTH: f32 = 0.01;
+const LARGE_BODY: f32 = 4.0;
 
 #[derive(Resource, Default)]
 #[resource(core)]
@@ -96,18 +98,34 @@ struct BodyGrid {
     rows: usize,
     starts: Vec<u32>,
     items: Vec<u32>,
+    large: Vec<u32>,
 }
 
 impl BodyGrid {
     fn new(placed: &[Placed], reach: f32) -> Self {
+        let width = |p: Placed| {
+            let (a, b) = bounds(p);
+            (b - a).max_element()
+        };
+        let mean = placed.iter().map(|&p| width(p)).sum::<f32>() / placed.len().max(1) as f32;
+        let limit = mean * LARGE_BODY;
         let mut lo = Vec2::splat(f32::MAX);
         let mut hi = Vec2::splat(f32::MIN);
         let mut widest = 0.01f32;
-        for &p in placed {
+        let mut large = Vec::new();
+        for (i, &p) in placed.iter().enumerate() {
             let (a, b) = bounds(p);
+            if width(p) > limit {
+                large.push(i as u32);
+                continue;
+            }
             lo = lo.min(a);
             hi = hi.max(b);
             widest = widest.max((b - a).max_element());
+        }
+        if lo.x > hi.x {
+            lo = Vec2::ZERO;
+            hi = Vec2::ONE;
         }
         let span = (hi - lo).max(Vec2::splat(widest));
         let budget = (placed.len() * MAX_CELLS_PER_BODY).max(1) as f32;
@@ -120,17 +138,23 @@ impl BodyGrid {
             cols,
             rows,
             starts: vec![0; cols * rows + 1],
-            items: vec![0; placed.len()],
+            items: vec![0; placed.len() - large.len()],
+            large,
         };
-        let slots: Vec<usize> = placed.iter().map(|p| grid.slot(p.1)).collect();
-        for &slot in &slots {
+        let slots: Vec<(usize, usize)> = placed
+            .iter()
+            .enumerate()
+            .filter(|&(_, &p)| width(p) <= limit)
+            .map(|(i, p)| (i, grid.slot(p.1)))
+            .collect();
+        for &(_, slot) in &slots {
             grid.starts[slot + 1] += 1;
         }
         for i in 1..grid.starts.len() {
             grid.starts[i] += grid.starts[i - 1];
         }
         let mut cursor = grid.starts.clone();
-        for (i, &slot) in slots.iter().enumerate() {
+        for &(i, slot) in &slots {
             grid.items[cursor[slot] as usize] = i as u32;
             cursor[slot] += 1;
         }
@@ -160,6 +184,9 @@ impl BodyGrid {
             for &i in &self.items[start..end] {
                 visit(i as usize);
             }
+        }
+        for &i in &self.large {
+            visit(i as usize);
         }
     }
 }
@@ -287,6 +314,7 @@ impl Sim {
         let grid = BodyGrid::new(&placed, SPECULATIVE);
         let mut near = Vec::new();
         let mut wake = Vec::new();
+        let mut swept_pairs: FastMap<u64, ()> = FastMap::default();
 
         for i in 0..n {
             if self.bodies[i].asleep {
@@ -317,24 +345,40 @@ impl Sim {
             let mut pairs = std::mem::take(&mut wake);
             let speed = self.vel[i].length();
             let (mine_lo, mine_hi) = bounds(mine);
-            let size = (mine_hi - mine_lo).max_element();
-            let reach = (margin * 2.0).min(size * MAX_BODY_REACH);
-            grid.neighbours(mine.1, reach, |k| {
+            let reach = (mine_hi - mine_lo).max_element() / 2.0;
+            let travel = self.vel[i] * step * 2.0;
+            let fast = travel.length() > grid.cell * 2.0;
+            let samples = if fast {
+                ((travel.length() / grid.cell).ceil() as u32).min(MAX_SWEEP_SAMPLES)
+            } else {
+                0
+            };
+            let mut visit = |k: usize| {
                 let j = solid[k];
                 if j == i {
                     return;
                 }
                 let theirs = self.vel[j].length();
+                let their_fast = theirs * step * 2.0 > grid.cell * 2.0;
                 let owned = speed > theirs || (speed == theirs && i < j);
-                if !owned && !self.bodies[j].asleep {
+                if !owned && !self.bodies[j].asleep && !fast && !their_fast {
                     return;
                 }
                 let found = gap(mine, placed[k]);
-                let other = self.vel[j].length() * step;
-                if found.1 < (margin + other).min(reach) {
+                let closing = -(self.vel[i] - self.vel[j]).dot(found.0);
+                if found.1 < SPECULATIVE + closing.max(0.0) * step {
                     pairs.push((j, found));
                 }
-            });
+            };
+            for sample in 0..=samples {
+                let along = sample as f32 / samples.max(1) as f32;
+                let ring = if sample == 0 { reach } else { 0.0 };
+                grid.neighbours(mine.1 + travel * along, ring, &mut visit);
+            }
+            if fast {
+                pairs.sort_unstable_by_key(|p| p.0);
+                pairs.dedup_by_key(|p| p.0);
+            }
             for (j, found) in pairs.drain(..) {
                 if self.bodies[j].asleep && speed > WAKE_SPEED && found.1 < margin {
                     self.wake(j);
@@ -344,6 +388,10 @@ impl Sim {
                     (x.min(y), x.max(y))
                 };
                 let key = lo_id << 31 | hi_id;
+                let swept = fast || self.vel[j].length() * step > grid.cell;
+                if swept && swept_pairs.insert(key, ()).is_some() {
+                    continue;
+                }
                 let sign = if self.entities[i].id as u64 == lo_id {
                     1.0
                 } else {
@@ -401,6 +449,18 @@ impl Sim {
         }
     }
 
+    fn keep_out_of_walls(&mut self, anchor: usize) {
+        for c in self.contacts.iter().filter(|c| c.b as usize == anchor) {
+            let a = c.a as usize;
+            let depth = -(c.separation + self.moved[a].dot(c.normal));
+            if depth > MAX_WALL_DEPTH {
+                self.moved[a] += c.normal * (depth - MAX_WALL_DEPTH);
+                let into = self.vel[a].dot(c.normal).min(0.0);
+                self.vel[a] -= c.normal * into;
+            }
+        }
+    }
+
     fn update_sleep(&mut self, gravity: Vec2, dt: f32) {
         for i in 0..self.count() {
             let body = &mut self.bodies[i];
@@ -429,6 +489,7 @@ impl Sim {
     ) {
         let n = self.count();
         self.find_contacts(grids, dt, cache);
+        self.contacts.sort_by_key(|c| c.b as usize == n);
         let h = dt / substeps as f32;
         let soft = Soft::new(h);
         for i in 0..n {
@@ -451,6 +512,7 @@ impl Sim {
             self.solve(&soft, h, false);
         }
 
+        self.keep_out_of_walls(n);
         cache.0.clear();
         for i in 0..n {
             self.pos[i] += self.moved[i];

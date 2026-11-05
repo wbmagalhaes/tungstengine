@@ -23,9 +23,11 @@ pub struct Headless {
 impl Headless {
     pub fn new(mut world: World, frame_ui: FrameUi, width: f32, height: f32) -> Self {
         install_core(&mut world);
+        let mut ui = UI::new();
+        ui.record_texts = true;
         let mut h = Headless {
             world,
-            ui: UI::new(),
+            ui,
             frame_ui,
             width,
             height,

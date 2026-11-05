@@ -103,7 +103,9 @@ fn build_post_chain(world: &mut World, profile: Option<&str>) -> PostChain {
             passes.push(PostPass { shader, params });
         }
     }
-    PostChain { passes }
+    PostChain {
+        passes: passes.into(),
+    }
 }
 
 #[derive(Clone, Default)]

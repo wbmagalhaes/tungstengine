@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use crate::ecs::prelude::*;
 
@@ -148,7 +149,7 @@ pub struct PostPass {
 
 #[derive(Resource, Default)]
 pub struct PostChain {
-    pub passes: Vec<PostPass>,
+    pub passes: Arc<[PostPass]>,
 }
 
 #[cfg(test)]

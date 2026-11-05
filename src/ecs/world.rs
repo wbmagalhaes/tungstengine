@@ -278,6 +278,11 @@ impl World {
         &mut self,
         ids: [TypeId; N],
     ) -> [Option<&mut dyn Any>; N] {
+        let repeated = (1..N).any(|i| ids[..i].contains(&ids[i]));
+        if repeated {
+            log::error!("query_mut repeats a component; the query returns nothing");
+            return [(); N].map(|_| None);
+        }
         self.columns
             .get_disjoint_mut(ids.each_ref())
             .map(|slot| slot.map(|col| col.as_any_mut()))

@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use fontdue::FontSettings;
@@ -295,13 +296,21 @@ pub fn glyph_run(font: Font, px: f32) -> GlyphRun<'static> {
     }
 }
 
+thread_local! {
+    static ADVANCES: RefCell<FastMap<(Font, char, u32), f32>> = RefCell::default();
+}
+
 pub fn advance(font: Font, px: f32, ch: char) -> f32 {
-    let f = face(font);
-    if f.font.has_glyph(ch) {
-        f.font.metrics(ch, px).advance_width
-    } else {
-        f.default_advance * px
-    }
+    ADVANCES.with_borrow_mut(|cache| {
+        *cache.entry((font, ch, px.to_bits())).or_insert_with(|| {
+            let f = face(font);
+            if f.font.has_glyph(ch) {
+                f.font.metrics(ch, px).advance_width
+            } else {
+                f.default_advance * px
+            }
+        })
+    })
 }
 
 pub fn atlas_pixels() -> Vec<u8> {

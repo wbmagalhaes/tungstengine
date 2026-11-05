@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::color::Color;
 use crate::ecs::prelude::*;
 use crate::rng::Rng;
-use crate::sprites::{SpriteArg, SpriteKey};
+use crate::sprites::{SpriteArg, SpriteTable, Sprites};
 use crate::ui::{Sprite, SpriteDraw};
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Default)]
@@ -60,12 +60,51 @@ impl EmitShape {
     }
 }
 
-fn sprite_by_name<'de, D: serde::Deserializer<'de>>(d: D) -> Result<SpriteDraw, D::Error> {
-    let name = String::deserialize(d)?;
-    Ok(match Sprite::from_name(&name) {
-        Some(sprite) => sprite.draw(),
-        None => name.draw(),
-    })
+#[derive(Clone, Debug, PartialEq)]
+pub struct ParticleSprite {
+    pub name: Option<String>,
+    pub draw: Option<SpriteDraw>,
+}
+
+impl ParticleSprite {
+    pub fn resolve(&self, table: &SpriteTable) -> SpriteDraw {
+        match (&self.name, self.draw) {
+            (_, Some(draw)) => draw,
+            (Some(name), None) => match Sprite::from_name(name) {
+                Some(sprite) => sprite.draw(),
+                None => table.draw(name),
+            },
+            (None, None) => Sprite::RECT.draw(),
+        }
+    }
+}
+
+impl Default for ParticleSprite {
+    fn default() -> Self {
+        ParticleSprite {
+            name: Some("rect".to_string()),
+            draw: None,
+        }
+    }
+}
+
+impl Serialize for ParticleSprite {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match &self.name {
+            Some(name) => serializer.serialize_str(name),
+            None => Err(serde::ser::Error::custom("particle sprite has no name")),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ParticleSprite {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        Ok(ParticleSprite {
+            name: Some(name),
+            draw: None,
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -84,8 +123,7 @@ pub struct ParticleEffect {
     pub stretch: f32,
     pub align: bool,
     pub colors: Vec<Color>,
-    #[serde(skip_serializing, deserialize_with = "sprite_by_name")]
-    pub sprite: SpriteDraw,
+    pub sprite: ParticleSprite,
     pub layer: i32,
     pub shape: EmitShape,
 }
@@ -106,7 +144,7 @@ impl Default for ParticleEffect {
             stretch: 1.0,
             align: false,
             colors: vec![Color::WHITE],
-            sprite: Sprite::RECT.draw(),
+            sprite: ParticleSprite::default(),
             layer: 0,
             shape: EmitShape::Point,
         }
@@ -199,7 +237,11 @@ impl ParticleEffect {
     }
 
     pub fn sprite(mut self, sprite: impl SpriteArg) -> Self {
-        self.sprite = sprite.resolve();
+        let name = sprite.name();
+        let draw = name
+            .is_none()
+            .then(|| sprite.resolve(&SpriteTable::default()));
+        self.sprite = ParticleSprite { name, draw };
         self
     }
 
@@ -274,6 +316,7 @@ pub struct LiveParticle {
     pub color: Color,
     pub draw: SpriteDraw,
     pub layer: i32,
+    pub z: f32,
 }
 
 impl LiveParticle {
@@ -345,11 +388,22 @@ impl Particles {
             color: effect.colors.get(pick).copied().unwrap_or(Color::WHITE),
             draw,
             layer: effect.layer,
+            z: 0.0,
         };
         self.live.push(particle);
     }
 
-    fn advance(&mut self, dt: f32) {
+    pub fn burst(&mut self, effect: &ParticleEffect, draw: SpriteDraw, pos: Vec2, z: f32) {
+        let first = self.live.len();
+        for _ in 0..effect.count {
+            self.spawn(effect, pos, Vec2::ZERO, draw);
+        }
+        for p in &mut self.live[first..] {
+            p.z = z;
+        }
+    }
+
+    pub fn advance(&mut self, dt: f32) {
         for p in &mut self.live {
             p.age += dt;
             p.velocity.y += p.gravity * dt;
@@ -374,6 +428,8 @@ pub fn particles_step(world: &mut World) -> SysResult {
     };
 
     let mut pool = std::mem::replace(world.resource_core_mut::<Particles>(), parked);
+    let table = world.resource::<Sprites>().ok().map(Sprites::shared);
+    let table = table.unwrap_or_default();
     let mut finished = Vec::new();
     for (e, emitter, t) in world.query_mut::<(&mut ParticleEmitter, &Transform)>() {
         let mut count = std::mem::take(&mut emitter.pending);
@@ -384,7 +440,7 @@ pub fn particles_step(world: &mut World) -> SysResult {
             count += whole as u32;
         }
         let origin = t.position.truncate() + emitter.offset;
-        let draw = emitter.effect.sprite;
+        let draw = emitter.effect.sprite.resolve(&table.borrow());
         for _ in 0..count {
             pool.spawn(&emitter.effect, origin, emitter.velocity, draw);
         }
@@ -503,6 +559,28 @@ mod tests {
     }
 
     #[test]
+    fn screen_particles_draw_at_their_z_and_expire() {
+        let mut ui = crate::ui::UI::new();
+        let effect = ParticleEffect::new().count(4).life(0.2).size(8.0);
+        ui.burst(&effect, (10.0, 20.0), 3.0);
+        ui.begin(100.0, 100.0, 0.05, Default::default());
+        assert_eq!(ui.draws.len(), 4);
+        assert!(ui.draws.iter().all(|d| d.z == 3.0));
+        ui.begin(100.0, 100.0, 0.5, Default::default());
+        assert!(ui.draws.is_empty());
+    }
+
+    #[test]
+    fn sprite_draws_keep_their_name_and_unnamed_ones_refuse_to_save() {
+        let named = ParticleEffect::new().sprite(Sprite::CIRCLE.draw());
+        assert_eq!(named.sprite.name.as_deref(), Some("circle"));
+        assert!(toml::to_string(&named).is_ok());
+        let cell = SpriteDraw::image(9, [0.0, 0.0], [0.5, 0.5], [8, 8]);
+        let unnamed = ParticleEffect::new().sprite(cell);
+        assert!(toml::to_string(&unnamed).is_err());
+    }
+
+    #[test]
     fn effects_load_from_toml() {
         let effect = ParticleEffect::parse(
             r##"
@@ -520,7 +598,10 @@ mod tests {
         assert_eq!(effect.colors[0], Color::hex("#ffffff"));
         assert_eq!(effect.shape, EmitShape::Box { size: [0.5, 0.0] });
         assert_eq!(effect.gravity, 0.0);
-        assert_eq!(effect.sprite, Sprite::CIRCLE.draw());
+        assert_eq!(
+            effect.sprite.resolve(&SpriteTable::default()),
+            Sprite::CIRCLE.draw()
+        );
     }
 
     #[test]
@@ -528,7 +609,8 @@ mod tests {
         let effect = ParticleEffect {
             colors: vec![Color::hex("#fcd34d")],
             ..Default::default()
-        };
+        }
+        .sprite(Sprite::CAPSULE);
         let text = toml::to_string(&effect).unwrap();
         assert_eq!(ParticleEffect::parse(&text).unwrap(), effect);
     }

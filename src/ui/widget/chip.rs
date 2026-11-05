@@ -13,8 +13,7 @@ pub struct Chip<'a> {
 }
 
 impl<'a> Chip<'a> {
-    pub fn new(rect: Rect, icon: impl crate::sprites::SpriteArg, text: &'a str) -> Self {
-        let icon = icon.resolve();
+    pub fn new(rect: Rect, icon: SpriteDraw, text: &'a str) -> Self {
         Chip {
             rect,
             icon,

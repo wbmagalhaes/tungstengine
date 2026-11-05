@@ -1,5 +1,8 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+
+use crate::particles::{ParticleEffect, Particles};
+use crate::sprites::SharedSprites;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
 
 use super::animation::{Anim, Presence, apply_anim, bbox_center};
@@ -94,6 +97,11 @@ pub struct TextRec {
 
 #[derive(Default)]
 pub struct UI {
+    sprites: SharedSprites,
+    scope: u64,
+    repeated_labels: std::collections::HashSet<u64>,
+    pub record_texts: bool,
+    pub particles: Particles,
     pub draws: Vec<DrawRect>,
     pub texts: Vec<TextRec>,
     pub width: f32,
@@ -250,6 +258,50 @@ impl UI {
         self.pressed = cursor.held;
         self.down = cursor.pressed;
         self.wheel = cursor.wheel;
+        self.particles.advance(dt);
+        self.draw_particles();
+    }
+
+    pub fn set_sprites(&mut self, sprites: SharedSprites) {
+        self.sprites = sprites;
+    }
+
+    pub fn art(&self, sprite: impl SpriteArg) -> SpriteDraw {
+        sprite.resolve(&self.sprites.borrow())
+    }
+
+    pub fn dt(&self) -> f32 {
+        self.dt
+    }
+
+    pub fn burst(&mut self, effect: &ParticleEffect, (x, y): (f32, f32), z: f32) {
+        let draw = effect.sprite.resolve(&self.sprites.borrow());
+        self.particles.burst(effect, draw, glam::Vec2::new(x, y), z);
+    }
+
+    fn draw_particles(&mut self) {
+        let clip = [0.0, 0.0, f32::INFINITY, f32::INFINITY];
+        for p in self.particles.iter() {
+            let corners = p.corners();
+            let quad = corners.map(|c| c.to_array());
+            let min = corners.into_iter().fold(glam::Vec2::MAX, glam::Vec2::min);
+            let max = corners.into_iter().fold(glam::Vec2::MIN, glam::Vec2::max);
+            let mut color = p.color;
+            color.a = p.current_alpha();
+            self.draws.push(DrawRect {
+                min: min.to_array(),
+                max: max.to_array(),
+                uv_min: p.draw.uv_min,
+                uv_max: p.draw.uv_max,
+                color: color.to_array(),
+                z: p.z,
+                tex: p.draw.tex,
+                clip,
+                quad: Some(quad),
+                uvs: None,
+                silhouette: false,
+            });
+        }
     }
 
     fn field_input(
@@ -1043,7 +1095,7 @@ impl UI {
         color: Color,
         z: f32,
     ) {
-        let sprite = sprite.resolve();
+        let sprite = self.art(sprite);
         let xs = pts.map(|p| p.0);
         let ys = pts.map(|p| p.1);
         let lerp = |t: [f32; 2]| {
@@ -1113,7 +1165,7 @@ impl UI {
     }
 
     pub fn sprite(&mut self, r: Rect, sprite: impl SpriteArg, color: Color) {
-        let sprite = sprite.resolve();
+        let sprite = self.art(sprite);
         self.sprite_smooth(sprite.pixel_rect(r), sprite, color);
     }
 
@@ -1125,7 +1177,7 @@ impl UI {
     }
 
     pub fn sprite_smooth(&mut self, r: Rect, sprite: impl SpriteArg, color: Color) {
-        let sprite = sprite.resolve();
+        let sprite = self.art(sprite);
         let clip = self.current_clip();
         self.draws.push(DrawRect {
             min: r.min(),
@@ -1195,7 +1247,7 @@ impl UI {
         color: Color,
         quarter_turns: u8,
     ) {
-        let sprite = sprite.resolve();
+        let sprite = self.art(sprite);
         let r = sprite.pixel_rect(r);
         let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
         let corners = [
@@ -1234,7 +1286,7 @@ impl UI {
         angle: f32,
         pivot: (f32, f32),
     ) {
-        let sprite = sprite.resolve();
+        let sprite = self.art(sprite);
         let (sin, cos) = angle.sin_cos();
         let quad = [
             (r.x, r.y),
@@ -1287,7 +1339,7 @@ impl UI {
     }
 
     pub fn sprite_outline(&mut self, r: Rect, sprite: impl SpriteArg, color: Color, width: f32) {
-        let sprite = sprite.resolve();
+        let sprite = self.art(sprite);
         let r = sprite.pixel_rect(r);
         let c = color.to_array();
         let clip = self.current_clip();
@@ -1328,7 +1380,7 @@ impl UI {
         let baseline = (y + font::top_to_baseline(f, px)).round();
         let c = color.to_array();
         let clip = self.current_clip();
-        if color.a > 0.05 && !s.trim().is_empty() {
+        if self.record_texts && color.a > 0.05 && !s.trim().is_empty() {
             let w = self.text_width_font(f, px, s);
             let r = Rect::new(x, y, w, px).with_z(z);
             let visible = r.x + r.w > clip[0]
@@ -1435,9 +1487,9 @@ impl UI {
             let frame = st.frame();
             let center = st.snapshot_center();
             let ancestor = st.ancestor;
-            let mut copy = st.draws.clone();
-            apply_anim(&mut copy, frame, center, ancestor);
-            replay.extend(copy);
+            let first = replay.len();
+            replay.extend_from_slice(&st.draws);
+            apply_anim(&mut replay[first..], frame, center, ancestor);
         }
         for key in remove {
             self.presence.remove(&key);
@@ -1450,7 +1502,7 @@ impl UI {
     }
 
     pub fn icon(&mut self, r: Rect, sprite: impl SpriteArg) {
-        let sprite = sprite.resolve();
+        let sprite = self.art(sprite);
         self.sprite(r, sprite, Color::WHITE);
     }
 
@@ -1460,11 +1512,31 @@ impl UI {
     // explicit `impl Hash` instead - use those in dynamic lists where a same-label widget can
     // appear/disappear conditionally and would otherwise shift the counter of later widgets.
     pub fn widget_id(&mut self, label: &str) -> u64 {
-        let lh = key_hash(label);
+        let lh = self.scoped(key_hash(label));
         let n = self.id_counts.entry(lh).or_insert(0);
         let id = key_hash((lh, *n));
         *n += 1;
+        let repeated = *n == 2;
+        if cfg!(debug_assertions) && repeated && self.repeated_labels.insert(lh) {
+            log::warn!("widget `{label}` repeats in one frame; wrap each one in ui.scope(key, ..)");
+        }
         id
+    }
+
+    fn scoped(&self, id: u64) -> u64 {
+        if self.scope == 0 {
+            id
+        } else {
+            key_hash((self.scope, id))
+        }
+    }
+
+    pub fn scope<R>(&mut self, key: impl Hash, body: impl FnOnce(&mut Self) -> R) -> R {
+        let outer = self.scope;
+        self.scope = key_hash((outer, key_hash(key))).max(1);
+        let out = body(self);
+        self.scope = outer;
+        out
     }
 
     pub fn interact(&mut self, rect: Rect, label: &str) -> Response {
@@ -1473,7 +1545,7 @@ impl UI {
     }
 
     pub fn interact_id(&mut self, rect: Rect, id: impl Hash) -> Response {
-        let id = key_hash(id);
+        let id = self.scoped(key_hash(id));
         self.interact_hashed(rect, id)
     }
 
@@ -1563,7 +1635,7 @@ impl UI {
         sprite: impl SpriteArg,
         tint: Color,
     ) -> Response {
-        let sprite = sprite.resolve();
+        let sprite = self.art(sprite);
         let resp = self.interact(rect, id);
         let bg = Color::GRAY_900
             .with_alpha(0.85)
@@ -1775,5 +1847,38 @@ mod field_tests {
             },
         );
         assert!(frame(&mut ui, &mut v, (500.0, 500.0), true, TextEdit::default()).submitted);
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use super::*;
+
+    fn ids(ui: &mut UI, keys: &[u32]) -> Vec<u64> {
+        ui.begin(100.0, 100.0, 0.016, Pointer::default());
+        keys.iter()
+            .map(|k| ui.scope(k, |ui| ui.widget_id("Buy")))
+            .collect()
+    }
+
+    #[test]
+    fn scoped_widgets_keep_their_id_when_a_neighbour_leaves() {
+        let mut ui = UI::new();
+        let all = ids(&mut ui, &[1, 2, 3]);
+        let rest = ids(&mut ui, &[2, 3]);
+        assert_eq!(rest, all[1..]);
+    }
+
+    #[test]
+    fn scopes_nest_and_restore() {
+        let mut ui = UI::new();
+        ui.begin(100.0, 100.0, 0.016, Pointer::default());
+        let plain = ui.widget_id("a");
+        let inner = ui.scope(1, |ui| ui.scope(2, |ui| ui.widget_id("a")));
+        let other = ui.scope(2, |ui| ui.widget_id("a"));
+        assert_ne!(plain, inner);
+        assert_ne!(inner, other);
+        ui.begin(100.0, 100.0, 0.016, Pointer::default());
+        assert_eq!(ui.widget_id("a"), plain);
     }
 }

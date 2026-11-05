@@ -224,8 +224,10 @@ pub fn save_prefab(world: &mut World, path: PathBuf, save_as: bool) {
         def.id = Uuid::new_v4();
         def.key = file_stem(Some(&path));
     }
-    let text = toml::to_string_pretty(&def).unwrap_or_default();
-    if let Err(e) = fs::write(&path, text) {
+    let saved = toml::to_string_pretty(&def)
+        .map_err(|e| e.to_string())
+        .and_then(|text| crate::write_atomic(&path, &text));
+    if let Err(e) = saved {
         return set_status(world, format!("error: {e}"));
     }
     let registry = scene::load_prefabs(Path::new(PREFABS_DIR));

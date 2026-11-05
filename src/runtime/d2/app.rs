@@ -11,7 +11,7 @@ use winit::window::{Window, WindowId};
 
 use crate::audio::Audio;
 use crate::ecs::prelude::*;
-use crate::input::{Input, PadBackend, Pointer};
+use crate::input::{Input, PadBackend};
 use crate::render::core::ClearColor;
 use crate::render::d2::gfx::Gfx;
 use crate::render::d2::{CursorWorld, View2D, WorldDraws, propagate_transforms, update_view};
@@ -158,13 +158,6 @@ impl App {
     }
 }
 
-pub fn cursor_input(world: &World) -> Pointer {
-    world
-        .resource::<Input>()
-        .map(Input::pointer)
-        .unwrap_or_default()
-}
-
 pub fn install_core(world: &mut World) {
     world.insert_resource(AppControl::default());
     world.resource_core_mut::<Input>();
@@ -200,10 +193,7 @@ pub fn tick(world: &mut World, ui: &mut UI, frame_ui: Option<FrameUi>, w: f32, h
     world.run();
 
     if let Some(frame_ui) = frame_ui {
-        let cursor = cursor_input(world);
-        ui.begin(w, h, dt, cursor);
-        frame_ui(world, ui);
-        ui.finish();
+        crate::runtime::ui_pass(world, ui, frame_ui, (w, h, dt));
     }
 
     if let Ok(input) = world.resource_mut::<Input>() {

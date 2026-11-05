@@ -1,17 +1,17 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use glam::Mat4;
+use glam::{Mat4, Vec3};
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
+use crate::ecs::FastMap;
 use crate::ecs::prelude::*;
 use crate::ui::DrawRect;
 
 use super::post::{FULLSCREEN_VERTEX, PASSTHROUGH_FRAGMENT, PostRegistry};
 use super::shader::{MATERIAL_FLOATS, ShaderRegistry};
 use super::transition::TransitionView;
-use super::view::{self, Scene};
+use super::view::{self, CameraView, Scene};
 use crate::texture::Texture2D;
 
 #[derive(Resource)]
@@ -117,6 +117,9 @@ fn fs(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
 }
 "#;
 
+const SHADOW_RANGE: f32 = 22.0;
+const SHADOW_FOCUS_MAX: f32 = 40.0;
+const SHADOW_FOCUS_DEFAULT: f32 = 15.0;
 const SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 
 const SPRITE_UI_WGSL: &str = r#"
@@ -274,7 +277,16 @@ struct LightUniform {
 }
 
 type DrawKey = (usize, usize, usize, usize, usize, usize);
-type SceneDraw = (usize, usize, usize, usize, usize, usize, wgpu::Buffer, u32);
+struct SceneDraw {
+    prog: usize,
+    mesh: usize,
+    face: usize,
+    pid: usize,
+    cast: usize,
+    occlude: usize,
+    buffer: wgpu::Buffer,
+    count: u32,
+}
 
 struct ShaderProgram {
     pipelines: [wgpu::RenderPipeline; 3],
@@ -467,6 +479,11 @@ fn make_outline_bind_group(
 }
 
 pub struct Gfx {
+    shadow_size: u32,
+    instance_pool: Vec<wgpu::Buffer>,
+    instance_cursor: usize,
+    param_pool: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
+    param_cursor: usize,
     gpu: GpuContext,
 
     ui_pipeline: wgpu::RenderPipeline,
@@ -1658,6 +1675,11 @@ impl Gfx {
             _mask: mask,
             _mask_view: mask_view,
             _mask_sampler: mask_sampler,
+            shadow_size,
+            instance_pool: Vec::new(),
+            instance_cursor: 0,
+            param_pool: Vec::new(),
+            param_cursor: 0,
             last_stats: view::RenderStats::default(),
             vram_bytes,
         };
@@ -1878,11 +1900,11 @@ impl Gfx {
         }
     }
 
-    fn prepare_draws(&self, scene: &Scene) -> (Vec<wgpu::BindGroup>, Vec<SceneDraw>) {
+    fn prepare_draws(&mut self, scene: &Scene) -> (Vec<wgpu::BindGroup>, Vec<SceneDraw>) {
         let nprog = self.programs.len();
         let mut param_sets: Vec<[f32; MATERIAL_FLOATS]> = Vec::new();
-        let mut param_lookup: HashMap<[u32; MATERIAL_FLOATS], usize> = HashMap::new();
-        let mut groups: HashMap<DrawKey, Vec<Instance>> = HashMap::new();
+        let mut param_lookup: FastMap<[u32; MATERIAL_FLOATS], usize> = FastMap::default();
+        let mut groups: FastMap<DrawKey, Vec<Instance>> = FastMap::default();
         for item in &scene.items {
             let mesh = item.mesh.index();
             if mesh >= self.meshes.len() {
@@ -1929,52 +1951,35 @@ impl Gfx {
 
         let param_bgs: Vec<wgpu::BindGroup> = param_sets
             .iter()
-            .map(|set| {
-                let buf = self
-                    .gpu
-                    .device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("material-params"),
-                        contents: bytemuck::cast_slice(set),
-                        usage: wgpu::BufferUsages::UNIFORM,
-                    });
-                self.gpu
-                    .device
-                    .create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("material-bg"),
-                        layout: &self.material_bgl,
-                        entries: &[wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: buf.as_entire_binding(),
-                        }],
-                    })
-            })
+            .map(|set| self.pooled_params(bytemuck::cast_slice(set)))
             .collect();
 
         let mut scene_draws: Vec<SceneDraw> = groups
             .iter()
             .map(|(&(prog, mesh, face, pid, cast, occlude), insts)| {
-                let buf = self
-                    .gpu
-                    .device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("instances"),
-                        contents: bytemuck::cast_slice(insts),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    });
-                (
+                let buf = self.pooled_instances(bytemuck::cast_slice(insts));
+                SceneDraw {
                     prog,
                     mesh,
                     face,
                     pid,
                     cast,
                     occlude,
-                    buf,
-                    insts.len() as u32,
-                )
+                    buffer: buf,
+                    count: insts.len() as u32,
+                }
             })
             .collect();
-        scene_draws.sort_by_key(|d| std::cmp::Reverse(d.5));
+        scene_draws.sort_by_key(|d| {
+            (
+                std::cmp::Reverse(d.occlude),
+                d.prog,
+                d.mesh,
+                d.face,
+                d.pid,
+                d.cast,
+            )
+        });
         (param_bgs, scene_draws)
     }
 
@@ -2089,7 +2094,17 @@ impl Gfx {
             multiview_mask: None,
         });
         pass.set_bind_group(0, &self.camera_bind_group, &[]);
-        for (prog, mesh_idx, face, pid, _cast, occlude, inst, count) in scene_draws {
+        for SceneDraw {
+            prog,
+            mesh: mesh_idx,
+            face,
+            pid,
+            occlude,
+            buffer: inst,
+            count,
+            ..
+        } in scene_draws
+        {
             let program = &self.programs[*prog];
             let mesh = &self.meshes[*mesh_idx];
             if *occlude == 0 {
@@ -2160,6 +2175,77 @@ impl Gfx {
             })
     }
 
+    fn shadow_center(&self, cam: &CameraView, light_dir: Vec3, up: Vec3) -> Vec3 {
+        let eye = cam.world.w_axis.truncate();
+        let forward = -cam.world.z_axis.truncate().normalize_or_zero();
+        let along = if forward.y < -0.01 {
+            (-eye.y / forward.y).clamp(0.0, SHADOW_FOCUS_MAX)
+        } else {
+            SHADOW_FOCUS_DEFAULT
+        };
+        let focus = eye + forward * along;
+        let basis = Mat4::look_at_rh(light_dir * 40.0, Vec3::ZERO, up);
+        let texel = 2.0 * SHADOW_RANGE / self.shadow_size.max(1) as f32;
+        let mut local = basis.transform_point3(focus);
+        local.x = (local.x / texel).round() * texel;
+        local.y = (local.y / texel).round() * texel;
+        basis.inverse().transform_point3(local)
+    }
+
+    fn pooled_instances(&mut self, bytes: &[u8]) -> wgpu::Buffer {
+        let slot = self.instance_cursor;
+        self.instance_cursor += 1;
+        let needed = bytes.len() as u64;
+        let fits = self
+            .instance_pool
+            .get(slot)
+            .is_some_and(|b: &wgpu::Buffer| b.size() >= needed);
+        if !fits {
+            let buffer = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("instances"),
+                size: needed.next_power_of_two().max(256),
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            if slot < self.instance_pool.len() {
+                self.instance_pool[slot] = buffer;
+            } else {
+                self.instance_pool.push(buffer);
+            }
+        }
+        let buffer = self.instance_pool[slot].clone();
+        self.gpu.queue.write_buffer(&buffer, 0, bytes);
+        buffer
+    }
+
+    fn pooled_params(&mut self, bytes: &[u8]) -> wgpu::BindGroup {
+        let slot = self.param_cursor;
+        self.param_cursor += 1;
+        if slot == self.param_pool.len() {
+            let buffer = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("material-params"),
+                size: bytes.len() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let group = self
+                .gpu
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("material-bg"),
+                    layout: &self.material_bgl,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: buffer.as_entire_binding(),
+                    }],
+                });
+            self.param_pool.push((buffer, group));
+        }
+        let (buffer, group) = &self.param_pool[slot];
+        self.gpu.queue.write_buffer(buffer, 0, bytes);
+        group.clone()
+    }
+
     pub fn size(&self) -> (f32, f32) {
         self.gpu.size()
     }
@@ -2207,6 +2293,8 @@ impl Gfx {
         quads: &[DrawRect],
         transition: &TransitionView,
     ) {
+        self.instance_cursor = 0;
+        self.param_cursor = 0;
         self.sync_atlas();
         // camera (from the MainCam entity)
         let aspect = self.gpu.config.width as f32 / self.gpu.config.height.max(1) as f32;
@@ -2242,120 +2330,30 @@ impl Gfx {
         } else {
             glam::Vec3::Y
         };
-        let center = glam::Vec3::ZERO;
+        let center = self.shadow_center(cam, light_dir, up);
         let eye = center + light_dir * 40.0;
         let light_view = Mat4::look_at_rh(eye, center, up);
-        let light_proj = Mat4::orthographic_rh(-22.0, 22.0, -22.0, 22.0, 1.0, 90.0);
+        let light_proj = Mat4::orthographic_rh(
+            -SHADOW_RANGE,
+            SHADOW_RANGE,
+            -SHADOW_RANGE,
+            SHADOW_RANGE,
+            1.0,
+            90.0,
+        );
         let light_vp = (light_proj * light_view).to_cols_array();
         self.gpu
             .queue
             .write_buffer(&self.shadow_buffer, 0, bytemuck::cast_slice(&light_vp));
 
-        // group instances by (shader, mesh, faces, params): shader picks the program, faces the
-        // cull pipeline, params dedupes per-material uniform blocks into bind groups.
-        let nprog = self.programs.len();
-        let mut param_sets: Vec<[f32; MATERIAL_FLOATS]> = Vec::new();
-        let mut param_lookup: HashMap<[u32; MATERIAL_FLOATS], usize> = HashMap::new();
-        let mut groups: HashMap<DrawKey, Vec<Instance>> = HashMap::new();
-        for item in &scene.items {
-            let mesh = item.mesh.index();
-            if mesh >= self.meshes.len() {
-                continue;
-            }
-            let prog = (item.shader.0 as usize).min(nprog.saturating_sub(1));
-            let param_id = if self
-                .programs
-                .get(prog)
-                .map(|p| p.has_params)
-                .unwrap_or(false)
-            {
-                let key: [u32; MATERIAL_FLOATS] = std::array::from_fn(|i| item.params[i].to_bits());
-                *param_lookup.entry(key).or_insert_with(|| {
-                    param_sets.push(item.params);
-                    param_sets.len()
-                })
-            } else {
-                0
-            };
-            groups
-                .entry((
-                    prog,
-                    mesh,
-                    item.faces.index(),
-                    param_id,
-                    item.cast_shadows as usize,
-                    item.outline_occlude as usize,
-                ))
-                .or_default()
-                .push(Instance {
-                    model: item.model.to_cols_array_2d(),
-                    color: item.color.to_array(),
-                    shader: item.shader.0,
-                    mr: [item.metallic, item.roughness],
-                    uvt: [
-                        item.uv_scale[0],
-                        item.uv_scale[1],
-                        item.uv_offset[0],
-                        item.uv_offset[1],
-                    ],
-                });
-        }
-
-        let param_bgs: Vec<wgpu::BindGroup> = param_sets
-            .iter()
-            .map(|set| {
-                let buf = self
-                    .gpu
-                    .device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("material-params"),
-                        contents: bytemuck::cast_slice(set),
-                        usage: wgpu::BufferUsages::UNIFORM,
-                    });
-                self.gpu
-                    .device
-                    .create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("material-bg"),
-                        layout: &self.material_bgl,
-                        entries: &[wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: buf.as_entire_binding(),
-                        }],
-                    })
-            })
-            .collect();
-
-        let mut scene_draws: Vec<SceneDraw> = groups
-            .iter()
-            .map(|(&(prog, mesh, face, pid, cast, occlude), insts)| {
-                let buf = self
-                    .gpu
-                    .device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("instances"),
-                        contents: bytemuck::cast_slice(insts),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    });
-                (
-                    prog,
-                    mesh,
-                    face,
-                    pid,
-                    cast,
-                    occlude,
-                    buf,
-                    insts.len() as u32,
-                )
-            })
-            .collect();
-        scene_draws.sort_by_key(|d| std::cmp::Reverse(d.5));
+        let (param_bgs, scene_draws) = self.prepare_draws(scene);
 
         self.last_stats = view::RenderStats {
             draw_calls: scene_draws.len() as u32,
-            instances: scene_draws.iter().map(|d| d.7).sum(),
+            instances: scene_draws.iter().map(|d| d.count).sum(),
             triangles: scene_draws
                 .iter()
-                .map(|d| self.meshes[d.1].count / 3 * d.7)
+                .map(|d| self.meshes[d.mesh].count / 3 * d.count)
                 .sum(),
             vram_bytes: self.vram_bytes,
         };
@@ -2383,15 +2381,7 @@ impl Gfx {
         let outline_bufs: Vec<Option<wgpu::Buffer>> = outline_by_mesh
             .iter()
             .map(|insts| {
-                (!insts.is_empty()).then(|| {
-                    self.gpu
-                        .device
-                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("outline-instances"),
-                            contents: bytemuck::cast_slice(insts),
-                            usage: wgpu::BufferUsages::VERTEX,
-                        })
-                })
+                (!insts.is_empty()).then(|| self.pooled_instances(bytemuck::cast_slice(insts)))
             })
             .collect();
         let draw_outline = scene.outline_width > 0.0 && outline_bufs.iter().any(Option::is_some);
@@ -2577,7 +2567,14 @@ impl Gfx {
             if self.shadow_enabled {
                 pass.set_pipeline(&self.shadow_pipeline);
                 pass.set_bind_group(0, &self.shadow_pass_bg, &[]);
-                for (_prog, mesh_idx, _face, _pid, cast, _occlude, inst, count) in &scene_draws {
+                for SceneDraw {
+                    mesh: mesh_idx,
+                    cast,
+                    buffer: inst,
+                    count,
+                    ..
+                } in &scene_draws
+                {
                     if *cast == 0 {
                         continue;
                     }
@@ -2646,7 +2643,17 @@ impl Gfx {
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            for (prog, mesh_idx, face, pid, _cast, occlude, inst, count) in &scene_draws {
+            for SceneDraw {
+                prog,
+                mesh: mesh_idx,
+                face,
+                pid,
+                occlude,
+                buffer: inst,
+                count,
+                ..
+            } in &scene_draws
+            {
                 let program = &self.programs[*prog];
                 let mesh = &self.meshes[*mesh_idx];
                 if *occlude == 0 {

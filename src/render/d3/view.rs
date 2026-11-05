@@ -6,42 +6,64 @@ use glam::{Mat4, Quat, Vec3};
 use crate::animation::{Clip, Joint, JointAnim, Skeleton};
 use crate::color::Color;
 use crate::ecs::prelude::*;
+use crate::ecs::{Baked, FastMap};
 
 use crate::texture::Texture2D;
 
 use super::components::{Camera, Faces, Material, Mesh, RenderSlot, Shader};
 
+const MAX_HIERARCHY_DEPTH: usize = 1024;
+
+fn local_matrix(world: &World, e: Entity) -> Mat4 {
+    world
+        .get::<Transform>(e)
+        .map(|t| t.matrix())
+        .unwrap_or(Mat4::IDENTITY)
+}
+
+fn resolve_transform(world: &mut World, e: Entity, done: &mut FastMap<Entity, Mat4>) -> Mat4 {
+    let mut chain = vec![e];
+    let mut base = Mat4::IDENTITY;
+    while let Some(&top) = chain.last() {
+        if let Some(&known) = done.get(&top) {
+            chain.pop();
+            base = known;
+            break;
+        }
+        match world.get::<Parent>(top).map(|p| p.0) {
+            Some(parent) if chain.len() < MAX_HIERARCHY_DEPTH => chain.push(parent),
+            _ => break,
+        }
+    }
+    for &node in chain.iter().rev() {
+        let baked = world.has::<Static>(node) && world.has::<Baked>(node);
+        let stored = world.get::<GlobalTransform>(node).map(|g| g.0);
+        base = match (baked, stored) {
+            (true, Some(m)) => m,
+            _ => base * local_matrix(world, node),
+        };
+        done.insert(node, base);
+        if !baked {
+            match world.get_mut::<GlobalTransform>(node) {
+                Some(g) => g.0 = base,
+                None => world.insert(node, GlobalTransform(base)),
+            }
+            if world.has::<Static>(node) {
+                world.insert(node, Baked);
+            }
+        }
+    }
+    base
+}
+
 pub fn propagate_transforms(world: &mut World) {
     let ents: Vec<Entity> = world.query::<(&Transform,)>().map(|(e, _)| e).collect();
-
-    let mut order: Vec<(Entity, u32)> = ents
-        .iter()
-        .map(|&e| {
-            let mut depth = 0u32;
-            let mut cur = e;
-            while let Some(p) = world.get::<Parent>(cur).map(|p| p.0) {
-                depth += 1;
-                cur = p;
-                if depth > 1024 {
-                    break;
-                }
-            }
-            (e, depth)
-        })
-        .collect();
-    order.sort_by_key(|&(_, d)| d);
-
-    for (e, _) in order {
-        let local = world
-            .get::<Transform>(e)
-            .map(|t| t.matrix())
-            .unwrap_or(Mat4::IDENTITY);
-        let parent_world = world
-            .get::<Parent>(e)
-            .map(|p| p.0)
-            .and_then(|p| world.get::<GlobalTransform>(p).map(|g| g.0))
-            .unwrap_or(Mat4::IDENTITY);
-        world.insert(e, GlobalTransform(parent_world * local));
+    let mut done = FastMap::default();
+    done.reserve(ents.len());
+    for e in ents {
+        if !done.contains_key(&e) {
+            resolve_transform(world, e, &mut done);
+        }
     }
 }
 
@@ -131,7 +153,7 @@ pub struct Scene {
     pub outline_width: f32,
     pub lighting: Lighting,
     pub time: f32,
-    pub post: Vec<super::post::PostPass>,
+    pub post: std::sync::Arc<[super::post::PostPass]>,
 }
 
 #[repr(C)]
@@ -890,6 +912,18 @@ mod tests {
 
         let g = world.get::<GlobalTransform>(child).unwrap();
         assert_eq!(g.position(), Vec3::new(15.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn static_entities_bake_once() {
+        let mut world = World::new();
+        let e = world.spawn();
+        world.insert(e, Transform::from_pos(Vec3::new(1.0, 0.0, 0.0)));
+        world.insert(e, Static);
+        propagate_transforms(&mut world);
+        world.get_mut::<Transform>(e).unwrap().position.x = 9.0;
+        propagate_transforms(&mut world);
+        assert_eq!(world.get::<GlobalTransform>(e).unwrap().position().x, 1.0);
     }
 
     #[test]

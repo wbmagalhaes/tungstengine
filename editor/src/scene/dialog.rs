@@ -114,8 +114,10 @@ pub fn save(world: &mut World, path: PathBuf) {
     let Ok(ed) = world.resource_mut::<DialogEditor>() else {
         return;
     };
-    let text = toml::to_string_pretty(&ed.doc).unwrap_or_default();
-    ed.status = match fs::write(&path, text) {
+    let saved = toml::to_string_pretty(&ed.doc)
+        .map_err(|e| e.to_string())
+        .and_then(|text| crate::write_atomic(&path, &text));
+    ed.status = match saved {
         Ok(_) => format!("saved: {} nodes", ed.doc.nodes.len()),
         Err(e) => format!("error: {e}"),
     };

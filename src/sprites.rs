@@ -5,11 +5,13 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::rc::Rc;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
-use crate::ecs::{FastMap, Resource};
+use crate::ecs::FastMap;
+use crate::ecs::prelude::*;
 use crate::texture::Texture2D;
 use crate::ui::{Sprite, SpriteDraw};
 
@@ -52,23 +54,41 @@ const FALLBACK: &str = "__missing";
 const FALLBACK_ID: u64 = sprite_id(FALLBACK);
 const FALLBACK_COLOR: [u8; 4] = [255, 0, 255, 255];
 
-thread_local! {
-    static TABLE: RefCell<FastMap<u64, SpriteDraw>> = RefCell::default();
+#[derive(Default)]
+pub struct SpriteTable {
+    draws: FastMap<u64, SpriteDraw>,
 }
 
-fn lookup(id: u64) -> Option<SpriteDraw> {
-    TABLE.with_borrow(|table| table.get(&id).copied())
+impl SpriteTable {
+    pub fn draw(&self, key: &impl SpriteKey) -> SpriteDraw {
+        self.draws
+            .get(&key.id())
+            .copied()
+            .unwrap_or_else(|| self.missing(key.key().as_ref()))
+    }
+
+    fn missing(&self, name: &str) -> SpriteDraw {
+        static WARNED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        if let Ok(mut w) = WARNED.lock()
+            && !w.iter().any(|n| n == name)
+        {
+            log::warn!("missing sprite `{name}`");
+            w.push(name.to_string());
+        }
+        self.draws
+            .get(&FALLBACK_ID)
+            .copied()
+            .unwrap_or_else(|| Sprite::RECT.draw())
+    }
 }
+
+pub type SharedSprites = Rc<RefCell<SpriteTable>>;
 
 pub trait SpriteKey {
     fn key(&self) -> Cow<'_, str>;
 
     fn id(&self) -> u64 {
         sprite_id(self.key().as_ref())
-    }
-
-    fn draw(&self) -> SpriteDraw {
-        lookup(self.id()).unwrap_or_else(|| missing_sprite(self.key().as_ref()))
     }
 }
 
@@ -94,36 +114,54 @@ impl<T: SpriteKey + ?Sized> SpriteKey for &T {
     }
 }
 
-pub fn missing_sprite(name: &str) -> SpriteDraw {
-    static WARNED: Mutex<Vec<String>> = Mutex::new(Vec::new());
-    if let Ok(mut w) = WARNED.lock()
-        && !w.iter().any(|n| n == name)
-    {
-        log::warn!("missing sprite `{name}`");
-        w.push(name.to_string());
-    }
-    lookup(FALLBACK_ID).unwrap_or_else(|| Sprite::RECT.draw())
-}
-
 pub trait SpriteArg {
-    fn resolve(self) -> SpriteDraw;
+    fn name(&self) -> Option<String> {
+        None
+    }
+
+    fn resolve(self, table: &SpriteTable) -> SpriteDraw;
 }
 
 impl SpriteArg for Sprite {
-    fn resolve(self) -> SpriteDraw {
+    fn name(&self) -> Option<String> {
+        self.builtin_name().map(str::to_string)
+    }
+
+    fn resolve(self, _: &SpriteTable) -> SpriteDraw {
         self.draw()
     }
 }
 
 impl SpriteArg for SpriteDraw {
-    fn resolve(self) -> SpriteDraw {
+    fn name(&self) -> Option<String> {
+        let builtin = (0..).map_while(|i| Sprite(i).builtin_name().map(|n| (Sprite(i), n)));
+        builtin
+            .into_iter()
+            .find(|(sprite, _)| sprite.draw() == *self)
+            .map(|(_, name)| name.to_string())
+    }
+
+    fn resolve(self, _: &SpriteTable) -> SpriteDraw {
         self
     }
 }
 
 impl<K: SpriteKey> SpriteArg for K {
-    fn resolve(self) -> SpriteDraw {
-        self.draw()
+    fn name(&self) -> Option<String> {
+        Some(self.key().into_owned())
+    }
+
+    fn resolve(self, table: &SpriteTable) -> SpriteDraw {
+        table.draw(&self)
+    }
+}
+
+impl World {
+    pub fn art(&self, sprite: impl SpriteArg) -> SpriteDraw {
+        match self.resource::<Sprites>() {
+            Ok(sprites) => sprite.resolve(&sprites.table.borrow()),
+            Err(_) => sprite.resolve(&SpriteTable::default()),
+        }
     }
 }
 
@@ -133,6 +171,7 @@ pub struct Sprites {
     images: Vec<Texture2D>,
     index: HashMap<String, usize>,
     dirty: Vec<usize>,
+    table: SharedSprites,
 }
 
 impl Default for Sprites {
@@ -141,6 +180,7 @@ impl Default for Sprites {
             images: Vec::new(),
             index: HashMap::new(),
             dirty: Vec::new(),
+            table: SharedSprites::default(),
         };
         sprites.insert(
             FALLBACK,
@@ -155,6 +195,10 @@ impl Default for Sprites {
 }
 
 impl Sprites {
+    pub fn shared(&self) -> SharedSprites {
+        self.table.clone()
+    }
+
     fn lookup(&self, path: &str) -> Option<usize> {
         self.index.get(path).copied()
     }
@@ -203,7 +247,7 @@ impl Sprites {
         self.images.push(texture);
         self.index.insert(name.to_string(), i);
         let draw = self.draw(i);
-        TABLE.with_borrow_mut(|table| table.insert(sprite_id(name), draw));
+        self.table.borrow_mut().draws.insert(sprite_id(name), draw);
         draw
     }
 
@@ -237,7 +281,8 @@ impl Sprites {
     pub fn get(&self, key: impl SpriteKey) -> SpriteDraw {
         let name = key.key();
         let name = name.as_ref();
-        self.find(name).unwrap_or_else(|| missing_sprite(name))
+        self.find(name)
+            .unwrap_or_else(|| self.table.borrow().missing(name))
     }
 
     fn draw(&self, i: usize) -> SpriteDraw {
@@ -302,12 +347,19 @@ mod key_tests {
         s
     }
 
+    fn world(sprites: Sprites) -> World {
+        let mut w = World::new();
+        w.insert_resource(sprites);
+        w
+    }
+
     #[test]
-    fn sprite_tables_do_not_leak_between_threads() {
-        let _sprites = sprites();
-        assert_ne!(Art::Chest.draw().px, [0, 0]);
-        let leaked = std::thread::spawn(|| lookup(sprite_id("chest")).is_some());
-        assert!(!leaked.join().unwrap());
+    fn each_world_resolves_from_its_own_sprites() {
+        let filled = world(sprites());
+        let empty = world(Sprites::default());
+        assert_ne!(filled.art(Art::Chest).px, [0, 0]);
+        assert_eq!(empty.art(Art::Chest).px, [1, 1]);
+        assert_ne!(filled.art(Art::Chest).px, [0, 0]);
     }
 
     #[test]
@@ -315,7 +367,8 @@ mod key_tests {
         let s = sprites();
         assert_eq!(s.images()[0].rgba, FALLBACK_COLOR);
         let fallback = s.get(FALLBACK);
-        assert_eq!(Art::Enemy("nope").draw().tex, fallback.tex);
+        let w = world(s);
+        assert_eq!(w.art(Art::Enemy("nope")).tex, fallback.tex);
     }
 
     #[test]
@@ -336,7 +389,7 @@ mod key_tests {
     #[test]
     fn ui_draws_from_a_key() {
         let mut ui = UI::new();
-        let _sprites = sprites();
+        ui.set_sprites(sprites().shared());
         ui.sprite(
             crate::ui::Rect::new(0.0, 0.0, 4.0, 4.0),
             Art::Chest,

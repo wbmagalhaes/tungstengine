@@ -83,6 +83,12 @@ impl Sprite {
         }
     }
 
+    pub fn builtin_name(self) -> Option<&'static str> {
+        ["rect", "circle", "triangle", "hexagon", "capsule"]
+            .get(self.0 as usize)
+            .copied()
+    }
+
     pub fn draw(self) -> SpriteDraw {
         let (uv_min, uv_max) = font::sprite_uv(self.0 as usize);
         SpriteDraw {

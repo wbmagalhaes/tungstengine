@@ -60,8 +60,7 @@ impl<'a> Tip<'a> {
         self
     }
 
-    pub fn icon(mut self, sprite: impl crate::sprites::SpriteArg) -> Self {
-        let sprite = sprite.resolve();
+    pub fn icon(mut self, sprite: SpriteDraw) -> Self {
         self.icon = Some(sprite);
         self
     }

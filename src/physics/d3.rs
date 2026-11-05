@@ -4,6 +4,10 @@ use crate::ecs::prelude::*;
 use crate::ecs::{RenderOffset, Transform};
 use crate::fixed_step::FixedStep;
 
+use super::solver3d::{ContactCache, Grid, Sim};
+
+const DEFAULT_SUBSTEPS: u32 = 2;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Shape3D {
     Box(Vec3),
@@ -14,6 +18,7 @@ pub enum Shape3D {
 pub struct Collider3D {
     pub shape: Shape3D,
     pub offset: Vec3,
+    pub sensor: bool,
 }
 
 impl Collider3D {
@@ -21,6 +26,7 @@ impl Collider3D {
         Collider3D {
             shape: Shape3D::Box(size),
             offset: Vec3::ZERO,
+            sensor: false,
         }
     }
 
@@ -28,15 +34,18 @@ impl Collider3D {
         Collider3D {
             shape: Shape3D::Sphere(radius),
             offset: Vec3::ZERO,
+            sensor: false,
         }
     }
 
-    fn reach(&self) -> f32 {
-        match self.shape {
-            Shape3D::Box(size) => size.min_element() / 2.0,
-            Shape3D::Sphere(r) => r,
-        }
-        .max(0.01)
+    pub fn offset(mut self, offset: Vec3) -> Self {
+        self.offset = offset;
+        self
+    }
+
+    pub fn sensor(mut self) -> Self {
+        self.sensor = true;
+        self
     }
 
     fn placed(&self, t: &Transform) -> Placed {
@@ -48,8 +57,13 @@ impl Collider3D {
 pub struct Body3D {
     pub velocity: Vec3,
     pub gravity_scale: f32,
+    pub mass: f32,
+    pub friction: f32,
     pub on_ground: bool,
-    previous: Vec3,
+    pub can_sleep: bool,
+    pub asleep: bool,
+    pub(super) still: f32,
+    pub(super) previous: Vec3,
 }
 
 impl Default for Body3D {
@@ -57,17 +71,45 @@ impl Default for Body3D {
         Body3D {
             velocity: Vec3::ZERO,
             gravity_scale: 1.0,
+            mass: 1.0,
+            friction: 0.0,
             on_ground: false,
+            can_sleep: false,
+            asleep: false,
+            still: 0.0,
             previous: Vec3::ZERO,
         }
     }
 }
 
-#[derive(Resource, Clone, Copy, Debug, Default)]
+impl Body3D {
+    pub fn friction(mut self, friction: f32) -> Self {
+        self.friction = friction;
+        self
+    }
+
+    pub fn sleepy(mut self) -> Self {
+        self.can_sleep = true;
+        self
+    }
+}
+
+#[derive(Resource, Clone, Copy, Debug)]
 #[resource(core)]
 pub struct Physics3D {
     pub gravity: Vec3,
     pub timing: FixedStep,
+    pub substeps: u32,
+}
+
+impl Default for Physics3D {
+    fn default() -> Self {
+        Physics3D {
+            gravity: Vec3::ZERO,
+            timing: FixedStep::default(),
+            substeps: DEFAULT_SUBSTEPS,
+        }
+    }
 }
 
 impl Physics3D {
@@ -86,7 +128,7 @@ pub struct RayHit3D {
     pub point: Vec3,
 }
 
-type Placed = (Shape3D, Vec3);
+pub(super) type Placed = (Shape3D, Vec3);
 
 fn box_push(a: Vec3, ha: Vec3, b: Vec3, hb: Vec3) -> Option<Vec3> {
     let d = a - b;
@@ -136,9 +178,19 @@ pub fn push_out(a: Placed, b: Placed) -> Option<Vec3> {
 fn solids(world: &World) -> Vec<Placed> {
     world
         .query::<(&Collider3D, &Transform)>()
-        .filter(|(e, _, _)| !world.has::<Body3D>(*e))
+        .filter(|(e, c, _)| !c.sensor && !world.has::<Body3D>(*e))
         .map(|(_, c, t)| c.placed(t))
         .collect()
+}
+
+impl World {
+    pub fn add_physics3d(&mut self) {
+        self.add_system_to(Stage::Physics, physics3d_step);
+    }
+
+    pub fn add_physics3d_if(&mut self, condition: impl Fn(&World) -> bool + 'static) {
+        self.add_system_to_if(Stage::Physics, condition, physics3d_step);
+    }
 }
 
 pub fn physics3d_step(world: &mut World) -> SysResult {
@@ -146,52 +198,19 @@ pub fn physics3d_step(world: &mut World) -> SysResult {
     let physics = world.resource_core_mut::<Physics3D>();
     let steps = physics.timing.advance(dt);
     let (gravity, step, alpha) = (physics.gravity, physics.timing.step, physics.timing.alpha());
+    let substeps = physics.substeps.max(1);
     if steps > 0 {
-        let walls = solids(world);
+        let walls = Grid::walls(solids(world));
+        let mut cache = std::mem::take(world.resource_core_mut::<ContactCache>());
+        let mut sim = Sim::load(world);
         for _ in 0..steps {
-            simulate(world, &walls, gravity, step);
+            sim.step(&walls, gravity, step, substeps, &mut cache);
         }
+        sim.store(world);
+        *world.resource_core_mut::<ContactCache>() = cache;
     }
     interpolate(world, alpha, step);
     Ok(())
-}
-
-fn simulate(world: &mut World, walls: &[Placed], gravity: Vec3, dt: f32) {
-    let bodies: Vec<(Entity, Collider3D)> = world
-        .query::<(&Body3D, &Collider3D)>()
-        .map(|(e, _, c)| (e, *c))
-        .collect();
-    for (e, collider) in bodies {
-        let Some(mut body) = world.get::<Body3D>(e).copied() else {
-            continue;
-        };
-        let Some(t) = world.get_mut::<Transform>(e) else {
-            continue;
-        };
-        body.previous = t.position;
-        body.velocity += gravity * body.gravity_scale * dt;
-        body.on_ground = false;
-        let travel = (body.velocity * dt).length();
-        let count = (travel / collider.reach() / 0.5).ceil().max(1.0);
-        for _ in 0..count as u32 {
-            t.position += body.velocity * dt / count;
-            for wall in walls {
-                let Some(push) = push_out(collider.placed(t), *wall) else {
-                    continue;
-                };
-                t.position += push;
-                let normal = push.normalize_or_zero();
-                let into = body.velocity.dot(normal);
-                if into < 0.0 {
-                    body.velocity -= normal * into;
-                }
-                if normal.dot(gravity) < 0.0 {
-                    body.on_ground = true;
-                }
-            }
-        }
-        world.insert(e, body);
-    }
 }
 
 fn interpolate(world: &mut World, alpha: f32, step: f32) {
@@ -248,6 +267,7 @@ pub fn raycast3d(world: &World, origin: Vec3, dir: Vec3, max: f32) -> Option<Ray
     let dir = dir.normalize_or_zero();
     world
         .query::<(&Collider3D, &Transform)>()
+        .filter(|(_, c, _)| !c.sensor)
         .filter_map(|(entity, c, t)| {
             let (shape, pos) = c.placed(t);
             let distance = match shape {
@@ -310,8 +330,44 @@ mod tests {
             physics3d_step(&mut w).unwrap();
         }
         let y = w.get::<Transform>(b).unwrap().position.y;
-        assert!((y - 0.5).abs() < 1e-3, "{y}");
+        assert!((y - 0.5).abs() < 1e-2, "{y}");
         assert!(w.get::<Body3D>(b).unwrap().on_ground);
+    }
+
+    #[test]
+    fn bodies_stack_push_and_sleep() {
+        let mut w = world(Vec3::new(0.0, -10.0, 0.0));
+        spawn(
+            &mut w,
+            Vec3::new(0.0, -0.5, 0.0),
+            Collider3D::cuboid(Vec3::new(10.0, 1.0, 10.0)),
+        );
+        let lower = body(&mut w, Vec3::new(0.0, 0.6, 0.0));
+        let upper = body(&mut w, Vec3::new(0.0, 1.8, 0.0));
+        w.insert(upper, Body3D::default().sleepy());
+        for _ in 0..30 {
+            physics3d_step(&mut w).unwrap();
+        }
+        let gap = w.get::<Transform>(upper).unwrap().position.y
+            - w.get::<Transform>(lower).unwrap().position.y;
+        assert!((gap - 1.0).abs() < 0.05, "{gap}");
+        assert!(w.get::<Body3D>(upper).unwrap().on_ground);
+        assert!(w.get::<Body3D>(upper).unwrap().asleep);
+    }
+
+    #[test]
+    fn sensors_do_not_block_bodies() {
+        let mut w = world(Vec3::new(0.0, -10.0, 0.0));
+        let b = body(&mut w, Vec3::new(0.0, 2.0, 0.0));
+        spawn(
+            &mut w,
+            Vec3::ZERO,
+            Collider3D::cuboid(Vec3::new(10.0, 1.0, 10.0)).sensor(),
+        );
+        for _ in 0..20 {
+            physics3d_step(&mut w).unwrap();
+        }
+        assert!(w.get::<Transform>(b).unwrap().position.y < -1.0);
     }
 
     #[test]

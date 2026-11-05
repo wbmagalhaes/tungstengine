@@ -66,19 +66,23 @@ pub fn mesh_hit(world: &World, meshes: &MeshRegistry, e: Entity, ray: &CursorRay
         .get::<GlobalTransform>(e)
         .map(|g| g.0)
         .unwrap_or(Mat4::IDENTITY);
+    if model.determinant().abs() < 1e-12 {
+        return None;
+    }
+    let inverse = model.inverse();
+    let local = CursorRay {
+        origin: inverse.transform_point3(ray.origin),
+        dir: inverse.transform_vector3(ray.dir),
+    };
     let data = meshes.data();
     let mut best = None;
     for slot in &renderer.slots {
         let Some((verts, idx)) = data.get(slot.mesh.index()) else {
             continue;
         };
-        let world_verts: Vec<Vec3> = verts
-            .iter()
-            .map(|v| model.transform_point3(Vec3::from_array(v.position)))
-            .collect();
         for tri in idx.as_chunks::<3>().0 {
-            let [a, b, c] = tri.map(|i| world_verts[i as usize]);
-            best = closest(best, ray_triangle(ray, a, b, c));
+            let [a, b, c] = tri.map(|i| Vec3::from_array(verts[i as usize].position));
+            best = closest(best, ray_triangle(&local, a, b, c));
         }
     }
     best
@@ -130,6 +134,26 @@ mod tests {
             origin: o,
             dir: d.normalize(),
         }
+    }
+
+    #[test]
+    fn local_ray_gives_the_world_distance_under_scale() {
+        let world_ray = CursorRay {
+            origin: Vec3::new(0.2, 0.2, 5.0),
+            dir: Vec3::NEG_Z,
+        };
+        let scale = Mat4::from_scale(Vec3::splat(4.0));
+        let corners = [Vec3::ZERO, Vec3::X, Vec3::Y];
+        let [a, b, c] = corners.map(|v| scale.transform_point3(v));
+        let direct = ray_triangle(&world_ray, a, b, c).unwrap();
+        let inverse = scale.inverse();
+        let local = CursorRay {
+            origin: inverse.transform_point3(world_ray.origin),
+            dir: inverse.transform_vector3(world_ray.dir),
+        };
+        let [a, b, c] = corners;
+        let through = ray_triangle(&local, a, b, c).unwrap();
+        assert!((direct - through).abs() < 1e-4);
     }
 
     #[test]
