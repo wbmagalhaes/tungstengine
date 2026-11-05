@@ -360,9 +360,20 @@ impl Particles {
     }
 }
 
+impl World {
+    pub fn add_particles(&mut self) {
+        self.add_system_to(Stage::Late, particles_step);
+    }
+}
+
 pub fn particles_step(world: &mut World) -> SysResult {
     let dt = world.dt();
-    let mut pool = std::mem::take(world.resource_core_mut::<Particles>());
+    let parked = Particles {
+        live: Vec::new(),
+        rng: Rng(1),
+    };
+
+    let mut pool = std::mem::replace(world.resource_core_mut::<Particles>(), parked);
     let mut finished = Vec::new();
     for (e, emitter, t) in world.query_mut::<(&mut ParticleEmitter, &Transform)>() {
         let mut count = std::mem::take(&mut emitter.pending);

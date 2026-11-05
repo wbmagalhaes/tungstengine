@@ -17,8 +17,8 @@ use crate::input::{Input, PadBackend, Pointer};
 use crate::render::d3::gfx::Gfx;
 use crate::render::d3::{
     Camera, CameraView, CursorRay, Faces, Hovered, Lighting, MainCam, MeshRegistry, Outline,
-    OverlayHook, PostChain, PostRegistry, RenderItem, Renderer, Scene, Shader, ShaderRegistry,
-    Transition, TransitionMask, propagate_transforms,
+    OverlayHook, PostChain, PostRegistry, RenderItem, RenderSlot, Renderer, Scene, Shader,
+    ShaderRegistry, Transition, TransitionMask, propagate_transforms,
 };
 
 #[derive(Default, Resource)]
@@ -71,6 +71,24 @@ fn main_camera(world: &World) -> Option<(Mat4, f32, f32, f32)> {
     Some((g.matrix(), c.fov, c.near, c.far))
 }
 
+fn for_each_slot(
+    world: &World,
+    e: Entity,
+    g: &GlobalTransform,
+    r: &Renderer,
+    mut visit: impl FnMut(Mat4, &RenderSlot),
+) {
+    let model = Mat4::from_translation(crate::ecs::render_offset(world, e)) * g.matrix();
+    let animator = world.get::<Animator>(e);
+    for slot in &r.slots {
+        let model = match animator {
+            Some(a) => model * a.delta(slot.bone),
+            None => model,
+        };
+        visit(model, slot);
+    }
+}
+
 fn gather_scene(world: &World) -> Scene {
     let camera = main_camera(world)
         .map(|(world, fov, near, far)| CameraView {
@@ -83,13 +101,7 @@ fn gather_scene(world: &World) -> Scene {
 
     let mut items = Vec::new();
     for (e, g, r) in world.query::<(&GlobalTransform, &Renderer)>() {
-        let model = Mat4::from_translation(crate::ecs::render_offset(world, e)) * g.matrix();
-        let animator = world.get::<Animator>(e);
-        for s in &r.slots {
-            let model = match &animator {
-                Some(a) => model * a.delta(s.bone),
-                None => model,
-            };
+        for_each_slot(world, e, g, r, |model, s| {
             items.push(RenderItem {
                 mesh: s.mesh,
                 model,
@@ -104,7 +116,7 @@ fn gather_scene(world: &World) -> Scene {
                 cast_shadows: r.cast_shadows,
                 outline_occlude: r.outline_occlude,
             });
-        }
+        });
     }
 
     let mut outlines = Vec::new();
@@ -120,13 +132,7 @@ fn gather_scene(world: &World) -> Scene {
             else {
                 continue;
             };
-            let model = Mat4::from_translation(crate::ecs::render_offset(world, n)) * g.matrix();
-            let animator = world.get::<Animator>(n);
-            for s in &r.slots {
-                let model = match &animator {
-                    Some(a) => model * a.delta(s.bone),
-                    None => model,
-                };
+            for_each_slot(world, n, g, r, |model, s| {
                 outlines.push(RenderItem {
                     mesh: s.mesh,
                     model,
@@ -141,7 +147,7 @@ fn gather_scene(world: &World) -> Scene {
                     cast_shadows: false,
                     outline_occlude: true,
                 });
-            }
+            });
         }
         outline_color = o.color.to_array();
         outline_width = o.width;

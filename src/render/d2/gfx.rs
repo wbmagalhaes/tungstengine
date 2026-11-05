@@ -351,10 +351,15 @@ impl Gfx {
         [x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32]
     }
 
-    fn batch(&mut self, quads: &[DrawRect], order: &[usize], ranges: &mut Vec<Range>) {
+    fn batch(
+        &mut self,
+        quads: &[DrawRect],
+        order: impl Iterator<Item = usize>,
+        ranges: &mut Vec<Range>,
+    ) {
         let mut cur: Option<(u32, [u32; 4])> = None;
         let mut start = self.indices.len() as u32;
-        for &qi in order {
+        for qi in order {
             let q = &quads[qi];
             let sc = self.scissor(q.clip);
             if cur != Some((q.tex, sc)) {
@@ -442,8 +447,7 @@ impl Gfx {
         self.indices.clear();
         let mut ranges = Vec::new();
 
-        let world_order: Vec<usize> = (0..world.len()).collect();
-        self.batch(world, &world_order, &mut ranges);
+        self.batch(world, 0..world.len(), &mut ranges);
         let world_ranges = if pixel_world { ranges.len() } else { 0 };
 
         let mut ui_order: Vec<usize> = (0..ui.len()).collect();
@@ -453,7 +457,7 @@ impl Gfx {
                 .partial_cmp(&ui[b].z)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        self.batch(ui, &ui_order, &mut ranges);
+        self.batch(ui, ui_order.into_iter(), &mut ranges);
         self.upload();
 
         let frame = match self.gpu.surface.get_current_texture() {

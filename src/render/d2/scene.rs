@@ -59,13 +59,49 @@ pub fn update_view(world: &mut World, screen: Vec2) {
     }
 }
 
+type DrawKey = (i32, f32, u32);
+
+#[derive(Default)]
+pub struct WorldDraws {
+    order: Vec<(DrawKey, u32)>,
+    rects: Vec<DrawRect>,
+    sorted: Vec<DrawRect>,
+}
+
+impl WorldDraws {
+    pub fn gather(&mut self, world: &World) -> &[DrawRect] {
+        self.order.clear();
+        self.rects.clear();
+        self.sorted.clear();
+        collect_draws(world, &mut self.order, &mut self.rects);
+        self.order.sort_unstable_by(|(a, i), (b, j)| {
+            a.0.cmp(&b.0)
+                .then(a.1.total_cmp(&b.1))
+                .then(a.2.cmp(&b.2))
+                .then(i.cmp(j))
+        });
+        let rects = &self.rects;
+        self.sorted
+            .extend(self.order.iter().map(|&(_, i)| rects[i as usize]));
+        &self.sorted
+    }
+}
+
 pub fn gather_world(world: &World) -> Vec<DrawRect> {
+    WorldDraws::default().gather(world).to_vec()
+}
+
+fn collect_draws(world: &World, order: &mut Vec<(DrawKey, u32)>, rects: &mut Vec<DrawRect>) {
     let view = world.resource::<View2D>().copied().unwrap_or_default();
     let vt = view.transform();
     let clip = [0.0, 0.0, view.screen.x, view.screen.y];
     let half = view.visible_half() + Vec2::splat(4.0);
 
-    let mut items: Vec<((i32, f32), DrawRect)> = Vec::new();
+    let mut push = |key: DrawKey, rect: DrawRect| {
+        order.push((key, rects.len() as u32));
+        rects.push(rect);
+    };
+
     for (e, g, s) in world.query::<(&GlobalTransform, &SpriteRenderer)>() {
         if !s.visible || s.color.a <= 0.0 {
             continue;
@@ -73,7 +109,12 @@ pub fn gather_world(world: &World) -> Vec<DrawRect> {
         let offset = render_offset(world, e);
         let m = Mat4::from_translation(offset) * g.matrix();
         let origin = m.transform_point3(Vec3::ZERO).truncate();
-        if (origin - view.center).abs().cmpgt(half + s.size).any() {
+        let scale = Vec2::new(m.x_axis.truncate().length(), m.y_axis.truncate().length());
+        if (origin - view.center)
+            .abs()
+            .cmpgt(half + s.size * scale)
+            .any()
+        {
             continue;
         }
         let lo = -s.anchor * s.size;
@@ -112,8 +153,8 @@ pub fn gather_world(world: &World) -> Vec<DrawRect> {
         if s.flip_x {
             std::mem::swap(&mut uv_min[0], &mut uv_max[0]);
         }
-        items.push((
-            (s.layer, origin.y + s.sort_offset),
+        push(
+            (s.layer, origin.y + s.sort_offset, e.id),
             DrawRect {
                 min,
                 max,
@@ -127,7 +168,7 @@ pub fn gather_world(world: &World) -> Vec<DrawRect> {
                 uvs: None,
                 silhouette: false,
             },
-        ));
+        );
     }
     if let Ok(particles) = world.resource::<Particles>() {
         for p in particles.iter() {
@@ -150,8 +191,8 @@ pub fn gather_world(world: &World) -> Vec<DrawRect> {
                 .fold([f32::MIN; 2], |m, c| [m[0].max(c[0]), m[1].max(c[1])]);
             let mut color = p.color;
             color.a = p.current_alpha();
-            items.push((
-                (p.layer, p.pos.y),
+            push(
+                (p.layer, p.pos.y, u32::MAX),
                 DrawRect {
                     min,
                     max,
@@ -165,17 +206,9 @@ pub fn gather_world(world: &World) -> Vec<DrawRect> {
                     uvs: None,
                     silhouette: false,
                 },
-            ));
+            );
         }
     }
-    items.sort_by(|a, b| {
-        a.0.0.cmp(&b.0.0).then(
-            a.0.1
-                .partial_cmp(&b.0.1)
-                .unwrap_or(std::cmp::Ordering::Equal),
-        )
-    });
-    items.into_iter().map(|(_, d)| d).collect()
 }
 
 #[cfg(test)]
@@ -223,6 +256,40 @@ mod tests {
         let d = gather_world(&world).remove(0);
         assert_eq!(d.max[1], d.max[1].round());
         assert_eq!(d.min[1], d.min[1].round());
+    }
+
+    #[test]
+    fn scaled_sprites_are_not_culled_early() {
+        let mut world = World::new();
+        world.insert_resource(view(true));
+        let e = world.spawn();
+        let m = Mat4::from_scale_rotation_translation(
+            Vec3::new(100.0, 1.0, 1.0),
+            glam::Quat::IDENTITY,
+            Vec3::new(40.0, 0.0, 0.0),
+        );
+        world.insert(e, GlobalTransform(m));
+        world.insert(e, SpriteRenderer::default());
+        assert_eq!(gather_world(&world).len(), 1);
+    }
+
+    #[test]
+    fn ties_draw_in_spawn_order() {
+        let mut world = World::new();
+        world.insert_resource(view(false));
+        for i in 0..64 {
+            let e = world.spawn();
+            world.insert(e, GlobalTransform::default());
+            let sprite = SpriteRenderer::default().color(crate::color::Color::new(
+                i as f32 / 64.0,
+                0.0,
+                0.0,
+                1.0,
+            ));
+            world.insert(e, sprite);
+        }
+        let reds: Vec<f32> = gather_world(&world).iter().map(|d| d.color[0]).collect();
+        assert!(reds.windows(2).all(|w| w[0] < w[1]));
     }
 
     #[test]

@@ -14,7 +14,7 @@ use crate::ecs::prelude::*;
 use crate::input::{Input, PadBackend, Pointer};
 use crate::render::core::ClearColor;
 use crate::render::d2::gfx::Gfx;
-use crate::render::d2::{CursorWorld, View2D, gather_world, propagate_transforms, update_view};
+use crate::render::d2::{CursorWorld, View2D, WorldDraws, propagate_transforms, update_view};
 use crate::sprites::Sprites;
 use crate::ui::UI;
 
@@ -50,6 +50,7 @@ pub struct App {
     world: World,
     frame_ui: FrameUi,
     ui: UI,
+    draws: WorldDraws,
     window: Option<Arc<Window>>,
     gfx: Option<Gfx>,
     #[cfg(target_arch = "wasm32")]
@@ -83,6 +84,7 @@ impl App {
             world,
             frame_ui,
             ui: UI::new(),
+            draws: WorldDraws::default(),
             window: None,
             gfx: None,
             #[cfg(target_arch = "wasm32")]
@@ -136,7 +138,7 @@ impl App {
             window.set_fullscreen(on.then_some(winit::window::Fullscreen::Borderless(None)));
         }
 
-        let world_draws = gather_world(&self.world);
+        let world_draws = self.draws.gather(&self.world);
         let clear = self
             .world
             .resource::<ClearColor>()
@@ -151,7 +153,7 @@ impl App {
                 }
             }
             let pixel_world = self.world.resource::<View2D>().is_ok_and(|v| v.pixel_snap);
-            gfx.render(clear, &world_draws, &self.ui.draws, pixel_world);
+            gfx.render(clear, world_draws, &self.ui.draws, pixel_world);
         }
     }
 }

@@ -1344,8 +1344,9 @@ impl UI {
             }
         }
         let mut pen = x;
+        let mut run = font::glyph_run(f, px);
         for ch in s.chars() {
-            match font::glyph(f, ch, px) {
+            match run.get(ch) {
                 Some(g) => {
                     if g.size[0] > 0.0 && g.size[1] > 0.0 {
                         let gx = (pen + g.bearing[0]).round();

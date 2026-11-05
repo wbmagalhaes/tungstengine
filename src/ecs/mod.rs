@@ -19,4 +19,4 @@ pub use hierarchy::set_parent;
 pub use marker::{Component, Resource, ResourceCore};
 pub use query::{Query, QueryMut};
 pub use time::Time;
-pub use world::{SysResult, World, in_state};
+pub use world::{Stage, SysResult, World, in_state};

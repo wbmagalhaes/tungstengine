@@ -1,14 +1,15 @@
 pub mod text;
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use std::sync::{LazyLock, Mutex, RwLock};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
-use crate::ecs::Resource;
+use crate::ecs::{FastMap, Resource};
 use crate::texture::Texture2D;
 use crate::ui::{Sprite, SpriteDraw};
 
@@ -51,10 +52,12 @@ const FALLBACK: &str = "__missing";
 const FALLBACK_ID: u64 = sprite_id(FALLBACK);
 const FALLBACK_COLOR: [u8; 4] = [255, 0, 255, 255];
 
-static TABLE: LazyLock<RwLock<HashMap<u64, SpriteDraw>>> = LazyLock::new(RwLock::default);
+thread_local! {
+    static TABLE: RefCell<FastMap<u64, SpriteDraw>> = RefCell::default();
+}
 
 fn lookup(id: u64) -> Option<SpriteDraw> {
-    TABLE.read().ok()?.get(&id).copied()
+    TABLE.with_borrow(|table| table.get(&id).copied())
 }
 
 pub trait SpriteKey {
@@ -200,9 +203,7 @@ impl Sprites {
         self.images.push(texture);
         self.index.insert(name.to_string(), i);
         let draw = self.draw(i);
-        if let Ok(mut table) = TABLE.write() {
-            table.insert(sprite_id(name), draw);
-        }
+        TABLE.with_borrow_mut(|table| table.insert(sprite_id(name), draw));
         draw
     }
 
@@ -299,6 +300,14 @@ mod key_tests {
         s.insert("chest", tex());
         s.insert("enemy_slime", tex());
         s
+    }
+
+    #[test]
+    fn sprite_tables_do_not_leak_between_threads() {
+        let _sprites = sprites();
+        assert_ne!(Art::Chest.draw().px, [0, 0]);
+        let leaked = std::thread::spawn(|| lookup(sprite_id("chest")).is_some());
+        assert!(!leaked.join().unwrap());
     }
 
     #[test]

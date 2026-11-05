@@ -38,13 +38,30 @@ pub fn in_state<S: Resource + PartialEq + Copy>(target: S) -> impl Fn(&World) ->
     move |world| world.resource::<S>().map(|s| *s == target).unwrap_or(false)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum Stage {
+    PreUpdate,
+    #[default]
+    Update,
+    Physics,
+    AfterPhysics,
+    Late,
+}
+
+struct Scheduled {
+    stage: Stage,
+    condition: Option<Condition>,
+    system: System,
+}
+
 #[derive(Default)]
 pub struct World {
     generations: Vec<u32>,
     free: Vec<u32>,
     columns: FastMap<TypeId, Box<dyn Column>>,
     resources: FastMap<TypeId, Box<dyn Any>>,
-    systems: Vec<(Option<Condition>, System)>,
+    systems: Vec<Scheduled>,
+    failures: FastMap<usize, String>,
 }
 
 impl World {
@@ -87,12 +104,38 @@ impl World {
             .expect("core resource type mismatch")
     }
 
+    fn schedule(&mut self, entry: Scheduled) {
+        let at = self.systems.partition_point(|s| s.stage <= entry.stage);
+        self.systems.insert(at, entry);
+    }
+
     pub fn add_system(&mut self, system: System) {
-        self.systems.push((None, system));
+        self.add_system_to(Stage::Update, system);
+    }
+
+    pub fn add_system_to(&mut self, stage: Stage, system: System) {
+        self.schedule(Scheduled {
+            stage,
+            condition: None,
+            system,
+        });
     }
 
     pub fn add_system_if(&mut self, condition: impl Fn(&World) -> bool + 'static, system: System) {
-        self.systems.push((Some(Box::new(condition)), system));
+        self.add_system_to_if(Stage::Update, condition, system);
+    }
+
+    pub fn add_system_to_if(
+        &mut self,
+        stage: Stage,
+        condition: impl Fn(&World) -> bool + 'static,
+        system: System,
+    ) {
+        self.schedule(Scheduled {
+            stage,
+            condition: Some(Box::new(condition)),
+            system,
+        });
     }
 
     pub fn init_state<S: Resource + Default>(&mut self) {
@@ -115,15 +158,28 @@ impl World {
 
     pub fn run(&mut self) {
         let systems = std::mem::take(&mut self.systems);
-        for (condition, system) in &systems {
-            if condition.as_ref().is_none_or(|c| c(self))
-                && let Err(e) = system(self)
-            {
-                log::error!("system error: {e}");
+        for entry in &systems {
+            if entry.condition.as_ref().is_none_or(|c| c(self)) {
+                let result = (entry.system)(self).map_err(|e| e.to_string());
+                if let Some(message) = self.note_failure(entry.system as usize, result) {
+                    log::error!("system error: {message}");
+                }
             }
         }
         let added = std::mem::replace(&mut self.systems, systems);
-        self.systems.extend(added);
+        for entry in added {
+            self.schedule(entry);
+        }
+    }
+
+    fn note_failure(&mut self, system: usize, result: Result<(), String>) -> Option<String> {
+        let Err(message) = result else {
+            self.failures.remove(&system);
+            return None;
+        };
+        let repeated = self.failures.get(&system) == Some(&message);
+        self.failures.insert(system, message.clone());
+        (!repeated).then_some(message)
     }
 
     pub fn spawn(&mut self) -> Entity {
@@ -225,6 +281,44 @@ impl World {
         self.columns
             .get_disjoint_mut(ids.each_ref())
             .map(|slot| slot.map(|col| col.as_any_mut()))
+    }
+}
+
+#[cfg(test)]
+mod failure_tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct Trace(Vec<u8>);
+    impl Resource for Trace {}
+
+    fn mark(world: &mut World, n: u8) -> SysResult {
+        world.resource_mut::<Trace>()?.0.push(n);
+        Ok(())
+    }
+
+    #[test]
+    fn stages_run_in_order_regardless_of_registration() {
+        let mut w = World::new();
+        w.insert_resource(Trace::default());
+        w.add_system_to(Stage::Late, |w| mark(w, 4));
+        w.add_system_to(Stage::Physics, |w| mark(w, 2));
+        w.add_system(|w| mark(w, 0));
+        w.add_system_to(Stage::AfterPhysics, |w| mark(w, 3));
+        w.add_system(|w| mark(w, 1));
+        w.run();
+        assert_eq!(w.resource::<Trace>().unwrap().0, [0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn repeated_system_errors_are_reported_once() {
+        let mut w = World::new();
+        let fail = || Err("boom".to_string());
+        assert!(w.note_failure(1, fail()).is_some());
+        assert!(w.note_failure(1, fail()).is_none());
+        assert!(w.note_failure(2, fail()).is_some());
+        assert!(w.note_failure(1, Ok(())).is_none());
+        assert!(w.note_failure(1, fail()).is_some());
     }
 }
 

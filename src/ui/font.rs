@@ -1,7 +1,8 @@
-use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use fontdue::FontSettings;
+
+use crate::ecs::FastMap;
 
 pub const ATLAS_W: usize = 2048;
 pub const ATLAS_H: usize = 2048;
@@ -41,7 +42,7 @@ struct Atlas {
     pen_y: usize,
     row_h: usize,
     reserved_h: usize,
-    glyphs: HashMap<(Font, char, u16), Option<Glyph>>,
+    glyphs: FastMap<(Font, char, u16), Option<Glyph>>,
     dirty: Option<(usize, usize)>,
 }
 
@@ -179,7 +180,7 @@ fn build() -> FontData {
         pen_y: 0,
         row_h: 2,
         reserved_h: 0,
-        glyphs: HashMap::new(),
+        glyphs: FastMap::default(),
         dirty: None,
     };
     for y in 0..2 {
@@ -268,15 +269,30 @@ fn rasterize(atlas: &mut Atlas, font: Font, ch: char, key: u16) -> Option<Glyph>
     })
 }
 
-pub fn glyph(font: Font, ch: char, px: f32) -> Option<Glyph> {
-    let key = size_key(px);
-    let mut a = atlas();
-    if let Some(g) = a.glyphs.get(&(font, ch, key)) {
-        return *g;
+pub struct GlyphRun<'a> {
+    atlas: MutexGuard<'a, Atlas>,
+    font: Font,
+    key: u16,
+}
+
+impl GlyphRun<'_> {
+    pub fn get(&mut self, ch: char) -> Option<Glyph> {
+        let id = (self.font, ch, self.key);
+        if let Some(g) = self.atlas.glyphs.get(&id) {
+            return *g;
+        }
+        let g = rasterize(&mut self.atlas, self.font, ch, self.key);
+        self.atlas.glyphs.insert(id, g);
+        g
     }
-    let g = rasterize(&mut a, font, ch, key);
-    a.glyphs.insert((font, ch, key), g);
-    g
+}
+
+pub fn glyph_run(font: Font, px: f32) -> GlyphRun<'static> {
+    GlyphRun {
+        atlas: atlas(),
+        font,
+        key: size_key(px),
+    }
 }
 
 pub fn advance(font: Font, px: f32, ch: char) -> f32 {
@@ -328,6 +344,10 @@ pub fn white_uv() -> ([f32; 2], [f32; 2]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn glyph(font: Font, ch: char, px: f32) -> Option<Glyph> {
+        glyph_run(font, px).get(ch)
+    }
 
     #[test]
     fn capsule_is_a_rounded_horizontal_bar() {

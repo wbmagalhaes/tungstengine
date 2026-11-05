@@ -209,7 +209,10 @@ fn interpolate(world: &mut World, alpha: f32, step: f32) {
         })
         .collect();
     for (e, offset) in offsets {
-        world.insert(e, RenderOffset(offset));
+        match world.get_mut::<RenderOffset>(e) {
+            Some(current) => current.0 = offset,
+            None => world.insert(e, RenderOffset(offset)),
+        }
     }
 }
 

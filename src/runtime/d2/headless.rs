@@ -179,7 +179,7 @@ impl Headless {
                 }
             }
         }
-        out.push_str(&format!("# {} frames simulados\n", self.frames));
+        out.push_str(&format!("# {} frames simulated\n", self.frames));
         (out, ok)
     }
 
