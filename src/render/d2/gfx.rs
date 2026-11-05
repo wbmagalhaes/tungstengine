@@ -60,6 +60,18 @@ fn fs_pixel(in: VsOut) -> @location(0) vec4<f32> {
 }
 
 @fragment
+fn fs_mask_add(in: VsOut) -> @location(0) vec4<f32> {
+    let a = textureSample(tex, samp, in.uv).r * in.color.a;
+    return vec4<f32>(in.color.rgb * a, a);
+}
+
+@fragment
+fn fs_smooth_add(in: VsOut) -> @location(0) vec4<f32> {
+    let texel = textureSample(tex, samp, in.uv) * in.color;
+    return vec4<f32>(texel.rgb * texel.a, texel.a);
+}
+
+@fragment
 fn fs_smooth(in: VsOut) -> @location(0) vec4<f32> {
     return shade(textureSample(tex, samp, in.uv), in.color, in.silhouette);
 }
@@ -106,7 +118,7 @@ fn fullscreen_uv(i: u32) -> vec2<f32> {
 }
 "#;
 
-const LAYER_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+const LAYER_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 pub struct LayerFrame<'a> {
     pub shaders: &'a [LayerShader],
@@ -344,13 +356,19 @@ impl Gfx {
             config.format,
             wgpu::BlendState::ALPHA_BLENDING,
         );
-        let add_mask_pipeline =
-            pipeline(device, &layout, &shader, "fs_mask", LAYER_FORMAT, ADDITIVE);
+        let add_mask_pipeline = pipeline(
+            device,
+            &layout,
+            &shader,
+            "fs_mask_add",
+            LAYER_FORMAT,
+            ADDITIVE,
+        );
         let add_smooth_pipeline = pipeline(
             device,
             &layout,
             &shader,
-            "fs_smooth",
+            "fs_smooth_add",
             LAYER_FORMAT,
             ADDITIVE,
         );

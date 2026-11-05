@@ -131,12 +131,21 @@ world.add_particles();
 
 ## Physics
 
-`Physics2D::earth()` gives a gravity that feels right at the default scale, and `physics.jump_speed(height)` turns a jump height into a speed. Bodies do not rotate.
+`Physics2D::earth()` gives a gravity that feels right at the default scale, and `physics.jump_speed(height)` turns a jump height into a speed. Bodies only turn when built with `.rotating()`, and colliders follow the `Transform` rotation.
 
 ```rust
 let body = Body2D::default().friction(0.4).sleepy();
 let wall = Collider2D::between(min, max);
 let trigger = Collider2D::circle(1.0).offset(offset).sensor();
+```
+
+Shapes are `rect`, `circle`, `polygon` and `regular`. For concave shapes, or a body made of several parts, attach colliders as child entities; mass and inertia come from the parts, and `body_of` finds the body from a part:
+
+```rust
+let boat = world.spawn();
+world.insert(boat, Transform::default());
+world.insert(boat, Body2D::default().rotating());
+world.attach_colliders(boat, Collider2D::concave(&points));
 ```
 
 Sensors report through `overlaps` and block nothing. Sleeping is opt-in with `.sleepy()`: a resting body costs almost nothing and wakes when hit or when its velocity is set. 3D has the same API with `Body3D`, `Collider3D` and `add_physics3d`.

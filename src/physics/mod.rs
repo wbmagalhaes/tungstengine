@@ -3,6 +3,7 @@ pub mod d2;
 pub mod d3;
 #[cfg(feature = "3d")]
 mod footprint;
+mod shapes2d;
 mod solver2d;
 #[cfg(feature = "3d")]
 mod solver3d;
