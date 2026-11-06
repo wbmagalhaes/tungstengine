@@ -187,6 +187,8 @@ Set `pixel_perfect = true` in `manifest.toml` for pixel art: sprites land on who
 
 `Switch` is an on and off toggle with a sliding knob, next to `Checkbox` for lists of choices.
 
+`Tabs` is a segmented control with a sliding fill, `Stepper` lights its pills one by one.
+
 ## UI lists
 
 Widgets get their identity from their label, so repeated labels need a key. Debug builds warn when a label repeats in a frame.

@@ -13,6 +13,9 @@ const ICON_SIZE: f32 = 12.0;
 const TRACK_GAP: f32 = 4.0;
 const SEGMENT_GAP: f32 = 4.0;
 const SEGMENT_HEIGHT: f32 = 8.0;
+const FILL_START_ALPHA: f32 = 0.5;
+const FILL_END_ALPHA: f32 = 1.0;
+const PILL_FADE: Transition = Transition::new(0.1, Ease::OutCubic).exit(0.18, Ease::InOutQuad);
 const END_HOVER: Transition = Transition::new(0.08, Ease::OutCubic).exit(0.18, Ease::InOutQuad);
 const SEGMENT_HOVER: Transition = Transition::new(0.06, Ease::OutQuad).exit(0.16, Ease::OutCubic);
 
@@ -85,20 +88,23 @@ impl Widget for Stepper<'_> {
         for i in 0..steps {
             let hit = Rect::new(x0 + i as f32 * seg, r.y, seg, r.h).with_z(r.z + 0.001);
             let resp = ui.interact_curved(hit, (self.id, "seg", i), SEGMENT_HOVER);
-            let on = i < level;
-            let color = if on {
-                t.accent.lerp(t.button_fg, resp.hover() * 0.25)
-            } else {
-                t.track_hover.lerp(t.accent, resp.hover() * 0.35)
-            };
-            let bar = Rect::new(
+            let target = f32::from(u8::from(i < level));
+            let lit = ui.transition((self.id, "lit", i), target, PILL_FADE);
+            let ramp = (i + 1) as f32 / steps as f32;
+            let strength = FILL_START_ALPHA + (FILL_END_ALPHA - FILL_START_ALPHA) * ramp;
+            let empty = t.track_hover.lerp(t.accent, resp.hover() * 0.35);
+            let full = t.accent.with_alpha(strength);
+            let color = empty
+                .lerp(full, lit)
+                .lerp(t.button_fg, resp.hover() * lit * 0.2);
+            let pill = Rect::new(
                 hit.x + SEGMENT_GAP / 2.0,
                 r.y + (r.h - SEGMENT_HEIGHT) / 2.0,
                 seg - SEGMENT_GAP,
                 SEGMENT_HEIGHT,
             )
             .with_z(r.z + 0.002);
-            ui.fill_round(bar, color, SEGMENT_HEIGHT / 2.0);
+            ui.fill_round(pill, color, SEGMENT_HEIGHT / 2.0);
             if resp.clicked {
                 next = if level == i + 1 { i } else { i + 1 };
             }
