@@ -157,7 +157,7 @@ fn popup(
         r.h * shown.len().clamp(1, MAX_ROWS) as f32,
     )
     .with_z(z);
-    let offset = ui.scroll_area((id, "scroll"), view, r.h * shown.len() as f32, t.accent);
+    let offset = ui.scroll_y((id, "scroll"), view, r.h * shown.len() as f32);
     let edge = if hide { t.border_radius } else { 0.0 };
     let bottom = [edge, edge, t.border_radius, t.border_radius];
     ui.fill_corners(view, t.field_bg, bottom, 1.0, t.panel_border);

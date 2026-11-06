@@ -62,49 +62,6 @@ impl Hasher for IdHasher {
     }
 }
 
-#[derive(Default, Clone)]
-pub struct TextEdit {
-    pub typed: String,
-    pub backspace: bool,
-    pub delete: bool,
-    pub left: bool,
-    pub right: bool,
-    pub up: bool,
-    pub down: bool,
-    pub home: bool,
-    pub end: bool,
-    pub enter: bool,
-    pub shift: bool,
-    pub ctrl: bool,
-    pub select_all: bool,
-    pub copy: bool,
-    pub cut: bool,
-    pub paste: Option<String>,
-}
-
-impl From<super::input::EditInput> for TextEdit {
-    fn from(e: super::input::EditInput) -> Self {
-        TextEdit {
-            typed: e.typed,
-            backspace: e.backspace,
-            delete: e.delete,
-            left: e.left,
-            right: e.right,
-            up: e.up,
-            down: e.down,
-            home: e.home,
-            end: e.end,
-            enter: e.enter,
-            shift: e.shift,
-            ctrl: e.ctrl,
-            select_all: e.select_all,
-            copy: e.copy,
-            cut: e.cut,
-            paste: e.paste,
-        }
-    }
-}
-
 const MULTI_CLICK_SECS: f32 = 0.35;
 
 fn byte_at(s: &str, chars: usize) -> usize {
@@ -179,7 +136,6 @@ pub struct UI {
     pub pressed: bool,
     down: bool,
     wheel: f32,
-    scrolls: IdMap<(f32, Option<f32>)>,
     scroll_views: IdMap<ScrollState>,
     repeats: IdMap<(f32, f32)>,
     states: IdMap<Box<dyn std::any::Any>>,
@@ -196,7 +152,6 @@ pub struct UI {
     drag_field: Option<u64>,
     focus_text: String,
     last_click: Option<(u64, f32, u32)>,
-    pub copied: Option<String>,
     dt: f32,
     elapsed: f32,
     time: f32,
@@ -399,12 +354,12 @@ impl UI {
         key: u64,
         rect: Rect,
         value: &mut String,
-        edit: &TextEdit,
         (radii, multiline): ([f32; 4], bool),
         hit: impl Fn(&Self, &str) -> usize,
         vertical: impl Fn(&Self, &str, usize, i32) -> usize,
     ) -> (FieldResponse, bool, usize, usize) {
         let hover = self.pointer_over(rect);
+        let edit = self.edit.clone();
         let len = value.chars().count();
         let (mut caret, mut anchor) = self.carets.get(&key).copied().unwrap_or((len, len));
         caret = caret.min(len);
@@ -460,8 +415,7 @@ impl UI {
             if (edit.copy || edit.cut) && caret != anchor {
                 let (a, b) = range(caret, anchor);
                 let text = value[byte_at(value, a)..byte_at(value, b)].to_string();
-                self.clipboard_out = Some(text.clone());
-                self.copied = Some(text);
+                self.clipboard_out = Some(text);
             }
             let mut insert = edit.typed.clone();
             if let Some(text) = &edit.paste {
@@ -596,19 +550,13 @@ impl UI {
         }
     }
 
-    pub fn text_field(
-        &mut self,
-        id: impl Hash,
-        rect: Rect,
-        value: &mut String,
-        edit: &TextEdit,
-    ) -> FieldResponse {
+    pub fn text_field(&mut self, id: impl Hash, rect: Rect, value: &mut String) -> FieldResponse {
         let look = FieldLook {
             px: (rect.h * 0.55).min(15.0),
             radii: [self.theme.border_radius; 4],
             placeholder: None,
         };
-        self.field_line(key_hash(id), rect, value, edit, look)
+        self.field_line(key_hash(id), rect, value, look)
     }
 
     pub fn field_line(
@@ -616,7 +564,6 @@ impl UI {
         key: u64,
         rect: Rect,
         value: &mut String,
-        edit: &TextEdit,
         look: FieldLook,
     ) -> FieldResponse {
         let px = look.px;
@@ -629,7 +576,6 @@ impl UI {
             key,
             rect,
             value,
-            edit,
             (look.radii, false),
             |ui, v| {
                 let shift = shift_of(ui, v, prev.min(v.chars().count()));
@@ -692,19 +638,13 @@ impl UI {
         lines
     }
 
-    pub fn text_area(
-        &mut self,
-        id: impl Hash,
-        rect: Rect,
-        value: &mut String,
-        edit: &TextEdit,
-    ) -> FieldResponse {
+    pub fn text_area(&mut self, id: impl Hash, rect: Rect, value: &mut String) -> FieldResponse {
         let look = FieldLook {
             px: 14.0,
             radii: [self.theme.border_radius; 4],
             placeholder: None,
         };
-        self.field_area(key_hash(id), rect, value, edit, look, false)
+        self.field_area(key_hash(id), rect, value, look, false)
     }
 
     pub fn field_area(
@@ -712,7 +652,6 @@ impl UI {
         key: u64,
         rect: Rect,
         value: &mut String,
-        edit: &TextEdit,
         look: FieldLook,
         multiline: bool,
     ) -> FieldResponse {
@@ -736,7 +675,6 @@ impl UI {
             key,
             rect,
             value,
-            edit,
             (look.radii, multiline),
             |ui, v| {
                 let spans = ui.wrapped_spans(px, v, width);
@@ -904,52 +842,6 @@ impl UI {
         );
         self.scroll_views.insert(id, state);
         state.offset
-    }
-
-    pub fn scroll_area(&mut self, id: impl Hash, view: Rect, content_h: f32, color: Color) -> f32 {
-        let key = key_hash(id);
-        let max = (content_h - view.h).max(0.0);
-        let (mut offset, mut drag) = self.scrolls.get(&key).copied().unwrap_or((0.0, None));
-        if view.contains(self.cursor) && self.wheel != 0.0 {
-            offset -= self.wheel * 60.0;
-        }
-        let bar_w = 8.0;
-        let track = Rect::new(view.x + view.w - bar_w, view.y, bar_w, view.h).with_z(view.z + 0.1);
-        let thumb_h = if content_h > 0.0 {
-            (view.h * view.h / content_h).max(30.0)
-        } else {
-            view.h
-        };
-        if max > 0.0 {
-            if self.down && track.contains(self.cursor) {
-                let thumb_y = view.y + (offset / max) * (view.h - thumb_h);
-                let grab = self.cursor.1 - thumb_y;
-                drag = Some(if (0.0..=thumb_h).contains(&grab) {
-                    grab
-                } else {
-                    thumb_h / 2.0
-                });
-            }
-            if let Some(grab) = drag {
-                let t = (self.cursor.1 - grab - view.y) / (view.h - thumb_h).max(1.0);
-                offset = t * max;
-            }
-        }
-        if !self.pressed {
-            drag = None;
-        }
-        offset = offset.clamp(0.0, max);
-        self.scrolls.insert(key, (offset, drag));
-        if max > 0.0 {
-            self.fill(track, color.with_alpha(0.2));
-            let thumb_y = view.y + (offset / max) * (view.h - thumb_h);
-            let hot = drag.is_some() || track.contains(self.cursor);
-            self.fill(
-                Rect::new(track.x, thumb_y, bar_w, thumb_h).with_z(track.z + 0.01),
-                color.with_alpha(if hot { 0.9 } else { 0.6 }),
-            );
-        }
-        offset
     }
 
     pub fn time(&self) -> f32 {
@@ -2256,7 +2148,7 @@ mod field_tests {
         value: &mut String,
         at: (f32, f32),
         press: bool,
-        edit: TextEdit,
+        edit: EditInput,
     ) -> FieldResponse {
         ui.begin(
             800.0,
@@ -2271,7 +2163,8 @@ mod field_tests {
                 wheel: 0.0,
             },
         );
-        let r = ui.text_field("f", Rect::new(10.0, 10.0, 300.0, 28.0), value, &edit);
+        ui.set_edit(edit);
+        let r = ui.text_field("f", Rect::new(10.0, 10.0, 300.0, 28.0), value);
         ui.finish();
         r
     }
@@ -2289,20 +2182,20 @@ mod field_tests {
     fn select_all_copy_and_paste_reach_the_field() {
         let mut ui = UI::new();
         let mut v = String::from("abc");
-        frame(&mut ui, &mut v, (20.0, 20.0), true, TextEdit::default());
-        frame(&mut ui, &mut v, (20.0, 20.0), false, TextEdit::default());
-        let all = crate::ui::input::EditInput {
+        frame(&mut ui, &mut v, (20.0, 20.0), true, EditInput::default());
+        frame(&mut ui, &mut v, (20.0, 20.0), false, EditInput::default());
+        let all = EditInput {
             select_all: true,
             copy: true,
             ..Default::default()
         };
-        frame(&mut ui, &mut v, (20.0, 20.0), false, all.into());
+        frame(&mut ui, &mut v, (20.0, 20.0), false, all);
         assert_eq!(ui.take_clipboard().as_deref(), Some("abc"));
-        let paste = crate::ui::input::EditInput {
+        let paste = EditInput {
             paste: Some("xy".to_string()),
             ..Default::default()
         };
-        frame(&mut ui, &mut v, (20.0, 20.0), false, paste.into());
+        frame(&mut ui, &mut v, (20.0, 20.0), false, paste);
         assert_eq!(v, "xy");
     }
 
@@ -2310,13 +2203,13 @@ mod field_tests {
     fn click_then_edit_and_submit() {
         let mut ui = UI::new();
         let mut v = String::from("[[\"anvil\", 2], [\"fusion_forge\", 1]]");
-        frame(&mut ui, &mut v, (20.0, 20.0), true, TextEdit::default());
+        frame(&mut ui, &mut v, (20.0, 20.0), true, EditInput::default());
         frame(
             &mut ui,
             &mut v,
             (20.0, 20.0),
             false,
-            TextEdit {
+            EditInput {
                 select_all: true,
                 ..Default::default()
             },
@@ -2326,7 +2219,7 @@ mod field_tests {
             &mut v,
             (20.0, 20.0),
             false,
-            TextEdit {
+            EditInput {
                 typed: "[[\"fusion_forge\", 1]]".into(),
                 ..Default::default()
             },
@@ -2337,7 +2230,7 @@ mod field_tests {
             &mut v,
             (20.0, 20.0),
             false,
-            TextEdit {
+            EditInput {
                 home: true,
                 ..Default::default()
             },
@@ -2347,7 +2240,7 @@ mod field_tests {
             &mut v,
             (20.0, 20.0),
             false,
-            TextEdit {
+            EditInput {
                 delete: true,
                 ..Default::default()
             },
@@ -2358,7 +2251,7 @@ mod field_tests {
             &mut v,
             (20.0, 20.0),
             false,
-            TextEdit {
+            EditInput {
                 end: true,
                 ..Default::default()
             },
@@ -2368,7 +2261,7 @@ mod field_tests {
             &mut v,
             (20.0, 20.0),
             false,
-            TextEdit {
+            EditInput {
                 backspace: true,
                 ..Default::default()
             },
@@ -2379,7 +2272,7 @@ mod field_tests {
             &mut v,
             (20.0, 20.0),
             false,
-            TextEdit {
+            EditInput {
                 enter: true,
                 ..Default::default()
             },
@@ -2391,21 +2284,21 @@ mod field_tests {
     fn blur_submits_only_when_changed() {
         let mut ui = UI::new();
         let mut v = String::from("abc");
-        frame(&mut ui, &mut v, (20.0, 20.0), true, TextEdit::default());
-        frame(&mut ui, &mut v, (20.0, 20.0), false, TextEdit::default());
-        assert!(!frame(&mut ui, &mut v, (500.0, 500.0), true, TextEdit::default()).submitted);
-        frame(&mut ui, &mut v, (20.0, 20.0), true, TextEdit::default());
+        frame(&mut ui, &mut v, (20.0, 20.0), true, EditInput::default());
+        frame(&mut ui, &mut v, (20.0, 20.0), false, EditInput::default());
+        assert!(!frame(&mut ui, &mut v, (500.0, 500.0), true, EditInput::default()).submitted);
+        frame(&mut ui, &mut v, (20.0, 20.0), true, EditInput::default());
         frame(
             &mut ui,
             &mut v,
             (20.0, 20.0),
             false,
-            TextEdit {
+            EditInput {
                 typed: "d".into(),
                 ..Default::default()
             },
         );
-        assert!(frame(&mut ui, &mut v, (500.0, 500.0), true, TextEdit::default()).submitted);
+        assert!(frame(&mut ui, &mut v, (500.0, 500.0), true, EditInput::default()).submitted);
     }
 }
 

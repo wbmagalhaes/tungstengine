@@ -58,6 +58,25 @@ fn thumb(ui: &mut UI, track: Rect, offset: f32, max: f32, content: f32, shown: f
     ui.fill_round(rect.with_z(track.z), color, BAR_WIDTH / 2.0);
 }
 
+impl UI {
+    pub fn scroll_y(&mut self, id: impl Hash, view: Rect, content_h: f32) -> f32 {
+        let key = key_hash(id);
+        let offset = self
+            .scroll_view(key, view, (view.w, content_h), (false, true))
+            .1;
+        let max = (content_h - view.h).max(0.0);
+        let hover = view.contains(self.cursor());
+        let target = f32::from(u8::from(hover && max > 0.0));
+        let shown = self.transition((key, "bar"), target, BAR_FADE);
+        if shown > 0.0 && max > 0.0 {
+            let x = view.x + view.w - BAR_MARGIN - BAR_WIDTH;
+            let track = Rect::new(x, view.y, BAR_WIDTH, view.h).with_z(view.z + 0.2);
+            thumb(self, track, offset, max, content_h, shown, false);
+        }
+        offset
+    }
+}
+
 impl<F: FnOnce(&mut UI, (f32, f32)) -> (f32, f32)> Widget for ScrollView<'_, F> {
     type Out = (f32, f32);
 

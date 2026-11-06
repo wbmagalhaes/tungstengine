@@ -101,13 +101,12 @@ impl Widget for TextArea<'_> {
 
     fn render(self, ui: &mut UI) -> bool {
         let look = self.style.computed(ui.theme.text());
-        let edit = ui.edit_input().into();
         let field = FieldLook {
             px: look.font_size,
             radii: look.border_radius,
             placeholder: self.placeholder,
         };
-        ui.field_area(self.id, self.rect, self.buffer, &edit, field, true)
+        ui.field_area(self.id, self.rect, self.buffer, field, true)
             .changed
     }
 }

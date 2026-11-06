@@ -25,7 +25,7 @@ pub use fan::fan_split;
 pub use feedback::{DENY_SECS, deny_bubble, deny_shake};
 pub use font::{Font, atlas_pixels, atlas_size, configure_fonts, take_dirty_rows};
 pub use immediate::{
-    FieldLook, FieldResponse, LineIcon, PixelPerfect, TextEdit, TextRec, UI, clip_half_plane,
+    FieldLook, FieldResponse, LineIcon, PixelPerfect, TextRec, UI, clip_half_plane,
 };
 pub use input::{CursorInput, EditInput};
 pub use layout::{Dir, Layout};
