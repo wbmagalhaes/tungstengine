@@ -8,6 +8,7 @@ use crate::ui::rect::Rect;
 use crate::ui::style::{ComputedStyle, LinearGradient, Stateful, Style, Styled, Transition};
 use crate::ui::widget::{Response, Widget};
 
+const PAD_LEFT: usize = 3;
 const HOLD_TAIL: f32 = 0.04;
 const HOLD_HEAD: f32 = 0.32;
 const HOLD_EDGE: f32 = 2.0;
@@ -40,6 +41,7 @@ pub struct Button<'a> {
     active: Style,
     enabled: bool,
     mode: Mode,
+    text_left: bool,
 }
 
 impl<'a> Button<'a> {
@@ -53,6 +55,7 @@ impl<'a> Button<'a> {
             active: Style::default(),
             enabled: true,
             mode: Mode::Click,
+            text_left: false,
         }
     }
 
@@ -63,6 +66,11 @@ impl<'a> Button<'a> {
 
     pub fn enabled(mut self, enabled: bool) -> Self {
         self.enabled = enabled;
+        self
+    }
+
+    pub fn text_left(mut self) -> Self {
+        self.text_left = true;
         self
     }
 
@@ -148,7 +156,11 @@ impl Widget for Button<'_> {
         let fg = fg.with_alpha(fg.a * o);
         let area = rect.inner();
         let w = ui.text_width(fs, self.label);
-        let tx = area.x + (area.w - w) / 2.0;
+        let tx = if self.text_left {
+            area.x + look.pad[PAD_LEFT]
+        } else {
+            area.x + (area.w - w) / 2.0
+        };
         let ty = area.y + (area.h - fs) / 2.0;
         ui.glyphs(tx, ty, fs, self.label, fg, rect.z);
         let pivot = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);

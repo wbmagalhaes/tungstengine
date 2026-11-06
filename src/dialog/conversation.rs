@@ -20,6 +20,7 @@ const OPTION_HEIGHT: f32 = 34.0;
 const OPTION_GAP: f32 = 6.0;
 const FOCUS_OUTLINE: f32 = 2.0;
 const OPTION_WIDTH: f32 = 340.0;
+const OPTION_PAD: f32 = 14.0;
 const PORTRAIT: f32 = 96.0;
 const TYPE_SPEED: f32 = 45.0;
 const Z: f32 = 90.0;
@@ -89,6 +90,8 @@ fn draw(ui: &mut UI, scene: &Scene) -> (Option<usize>, Option<usize>) {
         let label = format!("{}. {option}", i + 1);
         let mut button = Button::new(area, &label)
             .id(("conversation-option", i))
+            .text_left()
+            .pad_l(OPTION_PAD)
             .z(z)
             .hover(crate::ui::Style {
                 scale: Some((1.0, 1.0)),
