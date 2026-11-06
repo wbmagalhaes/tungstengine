@@ -68,6 +68,7 @@ impl Widget for Dialog<'_> {
         let t = ui.theme;
         let z = self.z;
         let key = format!("dialog-{}", self.id);
+        let ready = ui.since_shown((self.id, "ready"), ENTER) >= 1.0;
         ui.add(
             Group::new(|ui: &mut UI| {
                 ui.add(Backdrop::new().z(z));
@@ -99,7 +100,7 @@ impl Widget for Dialog<'_> {
                     if i + 1 == count {
                         button = button.bg(t.accent.with_alpha(0.55));
                     }
-                    if ui.add(button).clicked() {
+                    if ui.add(button).clicked() && ready {
                         picked = Some(i);
                     }
                 }
@@ -111,7 +112,7 @@ impl Widget for Dialog<'_> {
         if let Some(i) = picked {
             return Some(DialogEvent::Button(i));
         }
-        (self.dismissable && ui.edit_input().escape).then_some(DialogEvent::Dismissed)
+        (ready && self.dismissable && ui.edit_input().escape).then_some(DialogEvent::Dismissed)
     }
 }
 
@@ -145,6 +146,22 @@ mod tests {
             .map(|y| (x, y as f32))
             .find_map(|pos| frame(&mut ui, pos, true, false));
         assert_eq!(hit, Some(DialogEvent::Button(1)));
+    }
+
+    #[test]
+    fn click_during_the_entrance_is_ignored() {
+        let x = (800.0 + WIDTH) / 2.0 - PAD - 10.0;
+        for y in 0..600 {
+            let pointer = Pointer {
+                pos: (x, y as f32),
+                released: true,
+                ..Default::default()
+            };
+            let mut fresh = UI::new();
+            fresh.begin(800.0, 600.0, 0.016, pointer);
+            let dialog = Dialog::new("Quit", "Sure?", &["No", "Yes"]);
+            assert_eq!(fresh.add(dialog), None);
+        }
     }
 
     #[test]

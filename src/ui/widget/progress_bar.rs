@@ -22,6 +22,7 @@ pub struct ProgressBar<'a> {
     min: f32,
     max: f32,
     trail: bool,
+    ghost: Option<f32>,
     color: Option<Color>,
     label: Option<&'a str>,
     readout: Option<&'a str>,
@@ -36,6 +37,7 @@ impl<'a> ProgressBar<'a> {
             min: 0.0,
             max: 1.0,
             trail: false,
+            ghost: None,
             color: None,
             label: None,
             readout: None,
@@ -45,6 +47,11 @@ impl<'a> ProgressBar<'a> {
     pub fn range(mut self, min: f32, max: f32) -> Self {
         self.min = min;
         self.max = max;
+        self
+    }
+
+    pub fn ghost(mut self, value: f32) -> Self {
+        self.ghost = Some(value);
         self
     }
 
@@ -83,8 +90,12 @@ impl Widget for ProgressBar<'_> {
 
         let inner = r.with_padding(FILL_INSET).inner().with_z(r.z);
         ui.push_clip_round(inner, (t.border_radius - FILL_INSET).max(0.0));
-        if self.trail {
-            let behind = ui.transition((self.id, "trail"), share, TRAIL_CURVE);
+        let held = self.ghost.map(|g| ((g - self.min) / span).clamp(0.0, 1.0));
+        if self.trail || held.is_some() {
+            let behind = match held {
+                Some(ghost) => ghost,
+                None => ui.transition((self.id, "trail"), share, TRAIL_CURVE),
+            };
             if behind > shown {
                 let tail = Rect::new(inner.x, inner.y, inner.w * behind, inner.h);
                 let pale = color.lerp(t.button_fg, 0.5).with_alpha(TRAIL_ALPHA);
@@ -145,5 +156,22 @@ mod tests {
         let draws = frame(&mut ui, 2.0);
         assert!(draws.len() >= 3, "{draws:?}");
         assert!(ui.draws.iter().all(|d| d.z >= 3.0));
+    }
+
+    #[test]
+    fn ghost_draws_the_value_given_by_the_caller() {
+        let mut ui = UI::new();
+        ui.begin(800.0, 600.0, 0.016, Pointer::default());
+        let area = Rect::new(0.0, 0.0, 104.0, 20.0);
+        ui.add(ProgressBar::new(0.2, area, "ghost").ghost(0.6));
+        ui.begin(800.0, 600.0, 0.016, Pointer::default());
+        ui.add(ProgressBar::new(0.2, area, "ghost").ghost(0.6));
+        let widest = ui
+            .draws
+            .iter()
+            .filter(|d| d.round.is_none())
+            .map(|d| d.max[0] - d.min[0])
+            .fold(0.0, f32::max);
+        assert!(widest > 50.0, "{widest}");
     }
 }

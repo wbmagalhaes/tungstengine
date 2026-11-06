@@ -157,6 +157,7 @@ pub struct UI {
     time: f32,
     anims: IdMap<f32>,
     transitions: IdMap<Moving>,
+    pulses: IdMap<(u64, f32)>,
     anims_seen: std::collections::HashSet<u64>,
     hovers: IdMap<bool>,
     tween_seq: u64,
@@ -1269,6 +1270,27 @@ impl UI {
         if let Some(round) = self.draws.get_mut(start).and_then(|d| d.round.as_mut()) {
             round.gradient = Some(shape);
         }
+    }
+
+    pub fn since_shown(&mut self, id: impl Hash, seconds: f32) -> f32 {
+        let key = key_hash(id);
+        let dt = self.dt();
+        self.anims_seen.insert(key);
+        let progress = self.anims.entry(key).or_insert(0.0);
+        *progress = (*progress + dt / seconds.max(f32::EPSILON)).min(1.0);
+        *progress
+    }
+
+    pub fn pulse(&mut self, id: impl Hash, value: u64, seconds: f32, ease: Ease) -> f32 {
+        let key = key_hash(id);
+        let dt = self.dt();
+        let (seen, age) = self.pulses.entry(key).or_insert((value, seconds));
+        if *seen != value {
+            *seen = value;
+            *age = 0.0;
+        }
+        *age = (*age + dt).min(seconds);
+        ease.apply(*age / seconds.max(f32::EPSILON))
     }
 
     pub fn transition(&mut self, id: impl Hash, target: f32, transition: Transition) -> f32 {
