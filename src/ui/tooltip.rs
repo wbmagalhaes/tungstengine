@@ -113,9 +113,9 @@ impl Widget for Tip<'_> {
             };
         }
         let r = Rect::new(x.max(4.0), y.max(4.0), w, h).with_z(Z_TOOLTIP);
-        ui.fill(r, ui.theme.tooltip_bg);
+        ui.surface(r, ui.theme.tooltip_bg);
         if let Some(a) = tip.accent {
-            ui.fill(Rect::new(r.x, r.y, r.w, 2.0).with_z(r.z + 0.001), a);
+            ui.surface(Rect::new(r.x, r.y, r.w, 2.0).with_z(r.z + 0.001), a);
         }
         if let Some(sprite) = tip.icon {
             ui.sprite(
@@ -155,7 +155,7 @@ impl Widget for Tip<'_> {
             );
             if tip.struck.contains(&i) {
                 let tw = ui.text_width(size(i), text);
-                ui.fill(
+                ui.surface(
                     Rect::new(tx, ty + size(i) * 0.55, tw, 1.5).with_z(r.z + 0.003),
                     color.with_alpha(0.9),
                 );

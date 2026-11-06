@@ -54,7 +54,7 @@ impl Widget for ColorList<'_> {
             let swatch = Rect::new(x, r.y, r.h, r.h).with_z(r.z);
             let open = self.editing.is_some_and(|(e, _)| e == n);
             let resp = ui.interact_id(swatch, (self.id, n));
-            ui.fill(
+            ui.surface(
                 swatch,
                 if open {
                     t.mark
@@ -62,7 +62,7 @@ impl Widget for ColorList<'_> {
                     t.accent.lerp(t.button_fg, resp.hover() * 0.4)
                 },
             );
-            ui.fill(
+            ui.surface(
                 swatch.with_padding(2.0).inner().with_z(r.z + 0.001),
                 Color::hex(hex),
             );

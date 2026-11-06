@@ -11,13 +11,27 @@ use super::font;
 use super::input::EditInput;
 use super::layout::{Dir, Layout};
 use super::rect::Rect;
-use super::sprite::{DrawRect, SpriteDraw};
-use super::style::Styled;
+use super::sprite::{ClipRound, DrawRect, RoundGradient, RoundShape, SpriteDraw};
+use super::style::{ComputedStyle, Styled, Transition, fit_corners};
 use super::theme::Theme;
 use super::widget::{Backdrop, Button, Response, Text, Widget};
+use crate::animation::Ease;
 use crate::color::Color;
 use crate::input::Pointer;
 use crate::sprites::SpriteArg;
+
+const ROUND_BLEED: f32 = 1.0;
+const HOVER_TRANSITION: Transition =
+    Transition::new(0.12, Ease::OutCubic).exit(0.22, Ease::InOutQuad);
+
+#[derive(Clone, Copy)]
+struct Moving {
+    value: f32,
+    from: f32,
+    target: f32,
+    elapsed: f32,
+}
+const SHAPE_ONLY_BORDER: f32 = f32::MIN_POSITIVE;
 
 type IdMap<V> = HashMap<u64, V, BuildHasherDefault<IdHasher>>;
 
@@ -132,8 +146,10 @@ pub struct UI {
     last_click: Option<(u64, f32, u32)>,
     pub copied: Option<String>,
     dt: f32,
+    elapsed: f32,
     time: f32,
     anims: IdMap<f32>,
+    transitions: IdMap<Moving>,
     anims_seen: std::collections::HashSet<u64>,
     hovers: IdMap<bool>,
     tween_seq: u64,
@@ -141,9 +157,11 @@ pub struct UI {
     presence: IdMap<Presence>,
     presence_stack: Vec<(u64, usize, Anim, [f32; 4])>,
     pub pointer_used: bool,
+    pub active_slider: Option<u64>,
     block_z: f32,
     capture_z: f32,
     clip_stack: Vec<Rect>,
+    clip_rounds: Vec<Option<ClipRound>>,
     wrap_cache: RefCell<WrapCache>,
     wrap_scratch: Vec<(usize, usize)>,
 }
@@ -248,12 +266,15 @@ impl UI {
         self.width = w;
         self.height = h;
         self.dt = dt;
+        self.elapsed += dt;
         self.time += dt;
         self.tween_seq = 0;
         let seen = std::mem::take(&mut self.anims_seen);
         self.anims.retain(|id, _| seen.contains(id));
+        self.transitions.retain(|id, _| seen.contains(id));
         self.id_counts.clear();
         self.clip_stack.clear();
+        self.clip_rounds.clear();
         self.pointer_used = false;
         self.capture_z = self.block_z;
         self.block_z = 0.0;
@@ -313,6 +334,8 @@ impl UI {
                 quad: Some(quad),
                 uvs: None,
                 silhouette: false,
+                clip_round: self.clip_round(),
+                round: None,
             });
         }
     }
@@ -774,10 +797,31 @@ impl UI {
             None => rect,
         };
         self.clip_stack.push(r);
+        self.clip_rounds.push(self.clip_round());
+    }
+
+    pub fn push_clip_round(&mut self, rect: Rect, radius: f32) {
+        self.push_clip_corners(rect, [radius; 4]);
+    }
+
+    pub fn push_clip_corners(&mut self, rect: Rect, radii: [f32; 4]) {
+        self.push_clip(rect);
+        if let Some(top) = self.clip_rounds.last_mut() {
+            *top = Some(ClipRound {
+                center: [rect.x + rect.w / 2.0, rect.y + rect.h / 2.0],
+                half: [rect.w / 2.0, rect.h / 2.0],
+                radii: fit_corners(radii, rect.w, rect.h),
+            });
+        }
     }
 
     pub fn pop_clip(&mut self) {
         self.clip_stack.pop();
+        self.clip_rounds.pop();
+    }
+
+    fn clip_round(&self) -> Option<ClipRound> {
+        self.clip_rounds.last().copied().flatten()
     }
 
     pub fn clip<R>(&mut self, rect: Rect, body: impl FnOnce(&mut Self) -> R) -> R {
@@ -1026,6 +1070,212 @@ impl UI {
             quad: None,
             uvs: None,
             silhouette: false,
+            clip_round: self.clip_round(),
+            round: None,
+        });
+    }
+
+    pub fn surface(&mut self, r: Rect, color: Color) {
+        self.fill_round(r, color, self.theme.border_radius);
+    }
+
+    pub fn transform_since(
+        &mut self,
+        start: usize,
+        pivot: (f32, f32),
+        scale: (f32, f32),
+        translate: (f32, f32),
+        rotate: f32,
+    ) {
+        if scale == (1.0, 1.0) && translate == (0.0, 0.0) && rotate == 0.0 {
+            return;
+        }
+        let (sin, cos) = rotate.sin_cos();
+        let moved = |[x, y]: [f32; 2]| {
+            let (dx, dy) = ((x - pivot.0) * scale.0, (y - pivot.1) * scale.1);
+            [
+                pivot.0 + dx * cos - dy * sin + translate.0,
+                pivot.1 + dx * sin + dy * cos + translate.1,
+            ]
+        };
+        for draw in &mut self.draws[start..] {
+            let [x0, y0] = draw.min;
+            let [x1, y1] = draw.max;
+            let corners = draw
+                .quad
+                .unwrap_or([[x0, y0], [x1, y0], [x0, y1], [x1, y1]]);
+            let quad = corners.map(moved);
+            draw.quad = Some(quad);
+            draw.min = [
+                quad.iter().map(|p| p[0]).fold(f32::MAX, f32::min),
+                quad.iter().map(|p| p[1]).fold(f32::MAX, f32::min),
+            ];
+            draw.max = [
+                quad.iter().map(|p| p[0]).fold(f32::MIN, f32::max),
+                quad.iter().map(|p| p[1]).fold(f32::MIN, f32::max),
+            ];
+            if let Some(round) = &mut draw.round {
+                let smaller = scale.0.min(scale.1);
+                round.center = moved(round.center);
+                round.half = [round.half[0] * scale.0, round.half[1] * scale.1];
+                round.radii = round.radii.map(|r| r * smaller);
+                round.border *= smaller;
+                round.rotation += rotate;
+            }
+        }
+    }
+
+    pub fn fill_styled(&mut self, r: Rect, color: Color, style: &ComputedStyle) {
+        if style.outline_size > 0.0 {
+            let spread = style.outline_offset + style.outline_size;
+            let ring = Rect::new(
+                r.x - spread,
+                r.y - spread,
+                r.w + spread * 2.0,
+                r.h + spread * 2.0,
+            )
+            .with_z(r.z);
+            let radii = style
+                .border_radius
+                .map(|c| if c > 0.0 { c + spread } else { 0.0 });
+            self.fill_corners(
+                ring,
+                Color::CLEAR,
+                radii,
+                style.outline_size,
+                style.outline_color,
+            );
+        }
+        if style.outline_sweep.a > 0.0 && style.outline_size > 0.0 {
+            let phase = (self.elapsed * style.outline_sweep_speed).rem_euclid(1.0);
+            let color = style.outline_sweep.to_array();
+            let ring = self.draws.last_mut().and_then(|d| d.round.as_mut());
+            if let Some(ring) = ring {
+                ring.sweep = Some((phase, color));
+            }
+        }
+        let start = self.draws.len();
+        let gradient = style.gradient;
+        let base = gradient.map_or(color, |g| g.from.with_alpha(g.from.a * style.opacity));
+        self.fill_corners(
+            r,
+            base,
+            style.border_radius,
+            style.border_size,
+            style.border_color,
+        );
+        if style.backdrop_blur > 0.0 {
+            self.force_shape(start, r, base);
+            let shape = self.draws.get_mut(start).and_then(|d| d.round.as_mut());
+            if let Some(shape) = shape {
+                shape.blur = style.backdrop_blur;
+            }
+        }
+        if let Some(g) = gradient {
+            let faded = |c: Color| c.with_alpha(c.a * style.opacity).to_array();
+            let shape = RoundGradient {
+                via: faded(g.middle()),
+                to: faded(g.to),
+                angle: g.angle,
+            };
+            self.shape_gradient(start, r, base, shape);
+        }
+    }
+
+    fn force_shape(&mut self, start: usize, r: Rect, base: Color) {
+        if self.draws.get(start).is_none_or(|d| d.round.is_none()) {
+            self.draws.truncate(start);
+            self.fill_corners(r, base, [0.0; 4], SHAPE_ONLY_BORDER, Color::CLEAR);
+        }
+    }
+
+    fn shape_gradient(&mut self, start: usize, r: Rect, base: Color, shape: RoundGradient) {
+        self.force_shape(start, r, base);
+        if let Some(round) = self.draws.get_mut(start).and_then(|d| d.round.as_mut()) {
+            round.gradient = Some(shape);
+        }
+    }
+
+    pub fn transition(&mut self, id: impl Hash, target: f32, transition: Transition) -> f32 {
+        let id = key_hash(id);
+        let dt = self.dt();
+        self.anims_seen.insert(id);
+        let state = self.transitions.entry(id).or_insert(Moving {
+            value: target,
+            from: target,
+            target,
+            elapsed: 0.0,
+        });
+        if state.target != target {
+            state.from = state.value;
+            state.target = target;
+            state.elapsed = 0.0;
+        }
+        let rising = state.target >= state.from;
+        let (seconds, ease) = if rising {
+            transition.enter
+        } else {
+            transition.exit
+        };
+        state.elapsed += dt;
+        let progress = if seconds > 0.0 {
+            (state.elapsed / seconds).min(1.0)
+        } else {
+            1.0
+        };
+        state.value = state.from + (state.target - state.from) * ease.apply(progress);
+        state.value
+    }
+
+    pub fn fill_round(&mut self, r: Rect, color: Color, radius: f32) {
+        self.fill_bordered(r, color, radius, 0.0, Color::CLEAR);
+    }
+
+    pub fn fill_bordered(&mut self, r: Rect, color: Color, radius: f32, width: f32, border: Color) {
+        self.fill_corners(r, color, [radius; 4], width, border);
+    }
+
+    pub fn fill_corners(
+        &mut self,
+        r: Rect,
+        color: Color,
+        radii: [f32; 4],
+        width: f32,
+        border: Color,
+    ) {
+        let radii = fit_corners(radii, r.w, r.h);
+        if width <= 0.0 && radii.iter().all(|c| *c <= 0.0) {
+            self.fill(r, color);
+            return;
+        }
+        let (uv_min, uv_max) = font::white_uv();
+        let clip = self.current_clip();
+        let [x0, y0] = r.min();
+        let [x1, y1] = r.max();
+        self.draws.push(DrawRect {
+            min: [x0 - ROUND_BLEED, y0 - ROUND_BLEED],
+            max: [x1 + ROUND_BLEED, y1 + ROUND_BLEED],
+            uv_min,
+            uv_max,
+            color: color.to_array(),
+            z: r.z,
+            tex: 0,
+            clip,
+            quad: None,
+            uvs: None,
+            silhouette: false,
+            clip_round: self.clip_round(),
+            round: Some(RoundShape {
+                center: [(x0 + x1) / 2.0, (y0 + y1) / 2.0],
+                half: [r.w / 2.0, r.h / 2.0],
+                radii,
+                rotation: 0.0,
+                sweep: None,
+                blur: 0.0,
+                gradient: None,
+                border: width,
+                border_color: border.to_array(),
+            }),
         });
     }
 
@@ -1064,6 +1314,8 @@ impl UI {
             quad: Some(quad),
             uvs: None,
             silhouette: false,
+            clip_round: self.clip_round(),
+            round: None,
         });
     }
 
@@ -1097,6 +1349,8 @@ impl UI {
             quad: Some([a, b, d, c]),
             uvs: None,
             silhouette: false,
+            clip_round: self.clip_round(),
+            round: None,
         });
     }
 
@@ -1137,6 +1391,8 @@ impl UI {
             quad: Some([a, b, d, c]),
             uvs: None,
             silhouette: false,
+            clip_round: self.clip_round(),
+            round: None,
         });
     }
 
@@ -1160,6 +1416,8 @@ impl UI {
                 quad: Some([[x0, y0], [x1, y1], [x2, y2], [x2, y2]]),
                 uvs: Some([[u0, v0], [u1, v1], [u2, v2], [u2, v2]]),
                 silhouette: false,
+                clip_round: self.clip_round(),
+                round: None,
             });
         }
     }
@@ -1205,6 +1463,8 @@ impl UI {
             quad: None,
             uvs: None,
             silhouette: false,
+            clip_round: self.clip_round(),
+            round: None,
         });
     }
 
@@ -1289,6 +1549,8 @@ impl UI {
             quad: Some(quad),
             uvs: None,
             silhouette: false,
+            clip_round: self.clip_round(),
+            round: None,
         });
     }
 
@@ -1333,6 +1595,8 @@ impl UI {
             quad: Some(quad),
             uvs: None,
             silhouette: false,
+            clip_round: self.clip_round(),
+            round: None,
         });
     }
 
@@ -1372,6 +1636,8 @@ impl UI {
                 quad: None,
                 uvs: None,
                 silhouette: false,
+                clip_round: self.clip_round(),
+                round: None,
             });
         }
     }
@@ -1429,6 +1695,8 @@ impl UI {
                             quad: None,
                             uvs: None,
                             silhouette: false,
+                            clip_round: self.clip_round(),
+                            round: None,
                         });
                     }
                     pen += g.advance;
@@ -1566,7 +1834,11 @@ impl UI {
     pub fn interact_hashed(&mut self, rect: Rect, id: u64) -> Response {
         let hover = self.pointer_over(rect);
         let (entered, exited) = self.hover_edges(id, hover);
-        let t = self.anim(id, if hover { 1.0 } else { 0.0 });
+        let t = self.transition(
+            (id, "hover"),
+            if hover { 1.0 } else { 0.0 },
+            HOVER_TRANSITION,
+        );
         Response {
             hovered: hover,
             clicked: hover && self.clicked,

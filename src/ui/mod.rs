@@ -30,12 +30,12 @@ pub use layout::{Dir, Layout};
 pub use nest::Nest;
 pub use pan_zoom::PanZoom;
 pub use rect::Rect;
-pub use sprite::{DrawRect, Sprite, SpriteDraw};
-pub use style::{Style, StylePatch, Styled};
+pub use sprite::{ClipRound, DrawRect, RoundGradient, RoundShape, Sprite, SpriteDraw};
+pub use style::{ComputedStyle, LinearGradient, Stateful, Style, StyleStates, Styled, Transition};
 pub use theme::Theme;
 pub use tooltip::{Tip, TipAt, TipPart, Z_TOOLTIP};
 pub use widget::{
     Backdrop, Button, Checkbox, Chip, ColorList, ColorPicker, DropState, Dropdown, Frame, Group,
-    MultiSelect, Panel, Response, Stepper, Tabs, TagList, Text, TextArea, TextInput, Widget,
-    button, button_outlined, hold_button, repeat_button,
+    MultiSelect, Panel, Response, Slider, Stepper, Tabs, TagList, Text, TextArea, TextInput,
+    Widget, button, button_outlined, hold_button, repeat_button,
 };

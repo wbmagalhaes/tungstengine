@@ -1,7 +1,7 @@
 use crate::ui::font;
 use crate::ui::immediate::UI;
 use crate::ui::rect::Rect;
-use crate::ui::style::{Style, StylePatch, Styled};
+use crate::ui::style::{Style, Styled};
 use crate::ui::widget::Widget;
 
 pub struct Text<'a> {
@@ -9,7 +9,7 @@ pub struct Text<'a> {
     y: f32,
     text: &'a str,
     center: Option<Rect>,
-    patch: StylePatch,
+    style: Style,
     truncate: Option<f32>,
     ellipsis: &'a str,
     clip: bool,
@@ -23,7 +23,7 @@ impl<'a> Text<'a> {
             y,
             text,
             center: None,
-            patch: StylePatch::default(),
+            style: Style::default(),
             truncate: None,
             ellipsis: "…",
             clip: false,
@@ -63,8 +63,8 @@ impl<'a> Text<'a> {
 }
 
 impl Styled for Text<'_> {
-    fn patch_mut(&mut self) -> &mut StylePatch {
-        &mut self.patch
+    fn style_mut(&mut self) -> &mut Style {
+        &mut self.style
     }
 }
 
@@ -72,7 +72,7 @@ impl Widget for Text<'_> {
     type Out = ();
 
     fn render(self, ui: &mut UI) {
-        let s = Style::DEFAULT_TEXT.with(self.patch);
+        let s = self.style.computed(ui.theme.text());
         let o = s.opacity;
         let face = s.font;
         let fs = s.font_size;
@@ -92,7 +92,7 @@ impl Widget for Text<'_> {
             };
             if s.bg.a > 0.0 {
                 let h = lines.len().max(1) as f32 * lh;
-                ui.fill(
+                ui.surface(
                     Rect::new(bx, by, max_w, h).with_z(s.z),
                     s.bg.with_alpha(s.bg.a * o),
                 );
@@ -142,7 +142,7 @@ impl Widget for Text<'_> {
             None => (self.x, self.y),
         };
         if s.bg.a > 0.0 {
-            ui.fill(
+            ui.surface(
                 Rect::new(x, y, w, fs).with_z(s.z),
                 s.bg.with_alpha(s.bg.a * o),
             );

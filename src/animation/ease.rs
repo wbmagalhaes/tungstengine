@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::color::Color;
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Ease {
     Linear,

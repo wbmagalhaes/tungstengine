@@ -189,6 +189,8 @@ fn collect_draws(world: &World, order: &mut Vec<(DrawKey, u32)>, rects: &mut Vec
                 quad: Some(quad),
                 uvs: None,
                 silhouette: false,
+                clip_round: None,
+                round: None,
             },
         );
     }
@@ -227,6 +229,8 @@ fn collect_draws(world: &World, order: &mut Vec<(DrawKey, u32)>, rects: &mut Vec
                     quad: Some(quad),
                     uvs: None,
                     silhouette: false,
+                    clip_round: None,
+                    round: None,
                 },
             );
         }

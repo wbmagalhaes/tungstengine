@@ -36,8 +36,8 @@ fn head(ui: &mut UI, r: Rect, id: u64, text: &str, state: &mut DropState) -> boo
     let t = ui.theme;
     let size = t.font_size * 0.9;
     let resp = ui.interact_id(r, (id, "head"));
-    ui.fill(r, t.accent.lerp(t.button_fg, resp.hover() * 0.3));
-    ui.fill(r.with_padding(1.0).inner().with_z(r.z + 0.001), t.field_bg);
+    ui.surface(r, t.accent.lerp(t.button_fg, resp.hover() * 0.3));
+    ui.surface(r.with_padding(1.0).inner().with_z(r.z + 0.001), t.field_bg);
     ui.label(
         r.x + 8.0,
         r.y + (r.h - size) / 2.0,
@@ -75,7 +75,7 @@ fn popup(
     let size = t.font_size * 0.9;
     let z = r.z + 1.0;
     let search = Rect::new(r.x, r.y + r.h, r.w, r.h).with_z(z);
-    ui.fill(search, t.field_bg);
+    ui.surface(search, t.field_bg);
     ui.text_field((id, "search"), search, &mut state.search, edit);
     if state.search.is_empty() {
         ui.label(
@@ -101,7 +101,7 @@ fn popup(
     )
     .with_z(z);
     let offset = ui.scroll_area((id, "scroll"), view, r.h * shown.len() as f32, t.accent);
-    ui.fill(view, t.field_bg);
+    ui.surface(view, t.field_bg);
     let mut picked = None;
     ui.push_clip(view);
     for (n, opt) in shown.iter().enumerate() {
@@ -117,15 +117,15 @@ fn popup(
         } else {
             t.field_bg
         };
-        ui.fill(row, bg.lerp(t.button_fg, resp.hover() * 0.3));
+        ui.surface(row, bg.lerp(t.button_fg, resp.hover() * 0.3));
         let mut tx = row.x + 8.0;
         if matches!(m, Mark::Checked(_) | Mark::Unchecked | Mark::Disabled) {
             let bx =
                 Rect::new(row.x + 6.0, row.y + (row.h - 14.0) / 2.0, 14.0, 14.0).with_z(z + 0.002);
-            ui.fill(bx, t.accent);
-            ui.fill(bx.with_padding(2.0).inner().with_z(z + 0.003), t.field_bg);
+            ui.surface(bx, t.accent);
+            ui.surface(bx.with_padding(2.0).inner().with_z(z + 0.003), t.field_bg);
             if let Mark::Checked(p) = m {
-                ui.fill(bx.with_padding(4.0).inner().with_z(z + 0.004), t.mark);
+                ui.surface(bx.with_padding(4.0).inner().with_z(z + 0.004), t.mark);
                 ui.label(
                     row.x + row.w - 22.0,
                     row.y + (row.h - size) / 2.0,

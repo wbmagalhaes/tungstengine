@@ -1,6 +1,13 @@
+use crate::animation::Ease;
 use crate::ui::immediate::UI;
 use crate::ui::rect::Rect;
+use crate::ui::style::Transition;
 use crate::ui::widget::{Response, Widget};
+
+const BORDER: f32 = 2.0;
+const MARK_INSET: f32 = 5.0;
+const MARK_TRANSITION: Transition = Transition::new(0.1, Ease::OutCubic).exit(0.2, Ease::InOutQuad);
+const MAX_RADIUS_SHARE: f32 = 0.25;
 
 pub struct Checkbox<'a> {
     value: &'a mut bool,
@@ -48,10 +55,15 @@ impl Widget for Checkbox<'_> {
             resp.changed = true;
         }
         let bx = Rect::new(x, y + 2.0, 20.0, 20.0).with_z(z);
-        ui.fill(bx, t.accent.lerp(t.button_fg, resp.hover() * 0.3));
-        ui.fill(bx.with_padding(2.0).inner().with_z(z + 0.001), t.field_bg);
-        if *self.value {
-            ui.fill(bx.with_padding(5.0).inner().with_z(z + 0.002), t.mark);
+        let edge = t.accent.lerp(t.button_fg, resp.hover() * 0.3);
+        let radius = t.border_radius.min(bx.w * MAX_RADIUS_SHARE);
+        ui.fill_bordered(bx, t.field_bg, radius, BORDER, edge);
+        let target = f32::from(u8::from(*self.value));
+        let shown = ui.transition(("checkbox-mark", self.label), target, MARK_TRANSITION);
+        if shown > 0.0 {
+            let mark = bx.with_padding(MARK_INSET).inner().with_z(z + 0.002);
+            let color = t.mark.with_alpha(t.mark.a * shown);
+            ui.fill_round(mark, color, (radius - MARK_INSET).max(0.0));
         }
         ui.label(x + 28.0, y + 3.0, self.label, t.label, size, z);
         resp

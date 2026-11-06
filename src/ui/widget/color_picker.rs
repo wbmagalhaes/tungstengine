@@ -1,9 +1,16 @@
+use std::f32::consts::{FRAC_PI_2, PI};
 use std::hash::Hash;
 
 use crate::color::Color;
 use crate::ui::immediate::{UI, key_hash};
 use crate::ui::rect::Rect;
+use crate::ui::style::{ComputedStyle, LinearGradient};
 use crate::ui::widget::Widget;
+
+const HUE_BANDS: usize = 6;
+const MARK: f32 = 14.0;
+const MARK_RING: f32 = 2.0;
+const SHADE_OVERLAP: f32 = 1.0;
 
 pub struct ColorPicker<'a> {
     hsv: &'a mut (f32, f32, f32),
@@ -25,7 +32,6 @@ impl Widget for ColorPicker<'_> {
     type Out = bool;
 
     fn render(self, ui: &mut UI) -> bool {
-        const STEPS: usize = 16;
         let (rect, hsv, id) = (self.rect, self.hsv, self.id);
         let bar = 18.0;
         let side = (rect.w - bar - 8.0).min(rect.h);
@@ -45,33 +51,55 @@ impl Widget for ColorPicker<'_> {
             hsv.2 = 1.0 - ((cy - sv.y) / sv.h).clamp(0.0, 1.0);
             changed = true;
         }
-        let cell = side / STEPS as f32;
-        for yi in 0..STEPS {
-            for xi in 0..STEPS {
-                let s = (xi as f32 + 0.5) / STEPS as f32;
-                let v = 1.0 - (yi as f32 + 0.5) / STEPS as f32;
-                let r = Rect::new(
-                    sv.x + xi as f32 * cell,
-                    sv.y + yi as f32 * cell,
-                    cell + 0.5,
-                    cell + 0.5,
-                )
-                .with_z(rect.z);
-                ui.fill(r, Color::hsv(hsv.0, s, v));
-            }
-            let h = (yi as f32 + 0.5) / STEPS as f32 * 359.0;
-            let r = Rect::new(hue.x, hue.y + yi as f32 * cell, bar, cell + 0.5).with_z(rect.z);
-            ui.fill(r, Color::hsv(h, 1.0, 1.0));
+        let radius = ui.theme.border_radius;
+        let paint =
+            |ui: &mut UI, r: Rect, corners: [f32; 4], angle: f32, from: Color, to: Color| {
+                let look = ComputedStyle {
+                    border_radius: corners,
+                    gradient: Some(LinearGradient {
+                        angle,
+                        from,
+                        via: None,
+                        to,
+                    }),
+                    ..ComputedStyle::BASE
+                };
+                ui.fill_styled(r, from, &look);
+            };
+        let pure = Color::hsv(hsv.0, 1.0, 1.0);
+        let base = Rect::new(
+            sv.x + SHADE_OVERLAP,
+            sv.y + SHADE_OVERLAP,
+            sv.w - SHADE_OVERLAP * 2.0,
+            sv.h - SHADE_OVERLAP * 2.0,
+        )
+        .with_z(sv.z);
+        let base_radius = (radius - SHADE_OVERLAP).max(0.0);
+        paint(ui, base, [base_radius; 4], FRAC_PI_2, Color::WHITE, pure);
+        let shade = sv.with_z(rect.z + 0.001);
+        let clear = Color::BLACK.with_alpha(0.0);
+        paint(ui, shade, [radius; 4], PI, clear, Color::BLACK);
+
+        let band = hue.h / HUE_BANDS as f32;
+        for i in 0..HUE_BANDS {
+            let r = Rect::new(hue.x, hue.y + i as f32 * band, bar, band).with_z(rect.z);
+            let corners = match i {
+                0 => [radius, radius, 0.0, 0.0],
+                last if last == HUE_BANDS - 1 => [0.0, 0.0, radius, radius],
+                _ => [0.0; 4],
+            };
+            let at =
+                |step: usize| Color::hsv(step as f32 * 360.0 / HUE_BANDS as f32 % 360.0, 1.0, 1.0);
+            paint(ui, r, corners, PI, at(i), at(i + 1));
         }
-        let mark = |x: f32, y: f32, w: f32, h: f32| Rect::new(x, y, w, h).with_z(rect.z + 0.01);
+
         let (mx, my) = (sv.x + hsv.1 * sv.w, sv.y + (1.0 - hsv.2) * sv.h);
-        ui.fill(mark(mx - 4.0, my - 4.0, 8.0, 8.0), Color::WHITE);
-        ui.fill(
-            mark(mx - 2.0, my - 2.0, 4.0, 4.0),
-            Color::hsv(hsv.0, hsv.1, hsv.2),
-        );
+        let dot = Rect::new(mx - MARK / 2.0, my - MARK / 2.0, MARK, MARK).with_z(rect.z + 0.01);
+        let chosen = Color::hsv(hsv.0, hsv.1, hsv.2);
+        ui.fill_bordered(dot, chosen, MARK / 2.0, MARK_RING, Color::WHITE);
         let hy = hue.y + hsv.0 / 359.0 * hue.h;
-        ui.fill(mark(hue.x - 2.0, hy - 2.0, bar + 4.0, 4.0), Color::WHITE);
+        let handle = Rect::new(hue.x - 2.0, hy - 3.0, bar + 4.0, 6.0).with_z(rect.z + 0.01);
+        ui.fill_bordered(handle, pure, 3.0, MARK_RING, Color::WHITE);
         changed
     }
 }

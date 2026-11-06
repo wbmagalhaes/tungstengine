@@ -51,7 +51,7 @@ impl Widget for TagList<'_> {
                 y += h + gap;
             }
             let chip = Rect::new(x, y, w, h).with_z(r.z);
-            ui.fill(chip, t.chip_bg);
+            ui.surface(chip, t.chip_bg);
             ui.label(
                 chip.x + 8.0,
                 chip.y + (h - size) / 2.0,
@@ -63,7 +63,7 @@ impl Widget for TagList<'_> {
             let close = Rect::new(chip.x + w - 22.0, chip.y + (h - 18.0) / 2.0, 18.0, 18.0)
                 .with_z(r.z + 0.001);
             let resp = ui.interact_id(close, (self.id, n));
-            ui.fill(close, t.chip_hover.lerp(t.accent, resp.hover()));
+            ui.surface(close, t.chip_hover.lerp(t.accent, resp.hover()));
             ui.label(
                 close.x + 5.0,
                 close.y + 1.0,

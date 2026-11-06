@@ -1,7 +1,7 @@
 use super::immediate::UI;
 use super::layout::{Dir, Layout};
 use super::rect::Rect;
-use super::style::{Style, Styled};
+use super::style::{ComputedStyle, Style, Styled};
 use super::widget::{Button, Response, Text, Widget};
 
 pub struct Nest<'u> {
@@ -36,21 +36,23 @@ impl<'u> Nest<'u> {
     }
 
     pub fn button(&mut self, label: &str) -> Response {
-        self.button_styled(Style::DEFAULT_BUTTON, label)
+        self.button_styled(ComputedStyle::BUTTON.into(), label)
     }
 
     pub fn button_styled(&mut self, style: Style, label: &str) -> Response {
-        let (_, th) = self.ui.measure(style.font, style.font_size, label, None);
+        let look = style.computed(self.ui.theme.button(true).normal);
+        let (_, th) = self.ui.measure(look.font, look.font_size, label, None);
         let r = self.layout.next(th + 16.0);
         self.ui.add(Button::new(r, label).style(style))
     }
 
     pub fn text(&mut self, text: &str) {
-        self.text_styled(Style::DEFAULT_TEXT, text);
+        self.text_styled(Style::default(), text);
     }
 
     pub fn text_styled(&mut self, style: Style, text: &str) {
-        let r = self.layout.text(self.ui, &style, text);
+        let look = style.computed(self.ui.theme.text());
+        let r = self.layout.text(self.ui, &look, text);
         self.ui
             .add(Text::new(r.x, r.y, text).style(style).wrapped(r.w));
     }
@@ -81,7 +83,7 @@ impl UI {
     }
 
     pub fn panel<R>(&mut self, rect: Rect, body: impl FnOnce(&mut Nest) -> R) -> R {
-        self.panel_styled(rect, Style::PANEL, body)
+        self.panel_styled(rect, Style::default(), body)
     }
 
     pub fn panel_styled<R>(
@@ -90,10 +92,18 @@ impl UI {
         style: Style,
         body: impl FnOnce(&mut Nest) -> R,
     ) -> R {
-        self.fill(rect, style.bg.with_alpha(style.bg.a * style.opacity));
-        self.push_clip(rect);
-        let inner = rect.with_padding(style.pad).inner();
-        let out = self.column(inner, style.gap, body);
+        let look = style.computed(self.theme.panel());
+        self.fill_styled(rect, look.bg.with_alpha(look.bg.a * look.opacity), &look);
+        self.push_clip_corners(rect, look.border_radius);
+        let [top, right, bottom, left] = look.pad;
+        let inner = Rect::new(
+            rect.x + left,
+            rect.y + top,
+            (rect.w - left - right).max(0.0),
+            (rect.h - top - bottom).max(0.0),
+        )
+        .with_z(rect.z);
+        let out = self.column(inner, look.gap.1, body);
         self.pop_clip();
         out
     }

@@ -1,6 +1,6 @@
 use super::immediate::UI;
 use super::rect::Rect;
-use super::style::Style;
+use super::style::ComputedStyle;
 
 #[derive(Clone, Copy)]
 pub enum Dir {
@@ -57,7 +57,7 @@ impl Layout {
         self.cursor += amount;
     }
 
-    pub fn text(&mut self, ui: &UI, style: &Style, text: &str) -> Rect {
+    pub fn text(&mut self, ui: &UI, style: &ComputedStyle, text: &str) -> Rect {
         let max_w = match self.dir {
             Dir::Vertical => self.area.w,
             Dir::Horizontal => self.remaining(),

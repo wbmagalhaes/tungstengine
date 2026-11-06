@@ -5,7 +5,7 @@ use crate::ui::font;
 use crate::ui::immediate::{UI, key_hash};
 use crate::ui::input::{delete_selection, next_word, prev_word};
 use crate::ui::rect::Rect;
-use crate::ui::style::{Style, StylePatch, Styled};
+use crate::ui::style::{Style, Styled};
 use crate::ui::widget::Widget;
 
 pub struct TextInput<'a> {
@@ -13,7 +13,6 @@ pub struct TextInput<'a> {
     id: u64,
     buffer: &'a mut String,
     style: Style,
-    patch: StylePatch,
 }
 
 impl<'a> TextInput<'a> {
@@ -22,15 +21,14 @@ impl<'a> TextInput<'a> {
             rect,
             id: key_hash(id),
             buffer,
-            style: Style::DEFAULT_TEXT,
-            patch: StylePatch::default(),
+            style: Style::default(),
         }
     }
 }
 
 impl Styled for TextInput<'_> {
-    fn patch_mut(&mut self) -> &mut StylePatch {
-        &mut self.patch
+    fn style_mut(&mut self) -> &mut Style {
+        &mut self.style
     }
 }
 
@@ -39,8 +37,8 @@ impl Widget for TextInput<'_> {
 
     fn render(self, ui: &mut UI) -> bool {
         let rect = self.rect;
-        let face = self.style.with(self.patch).font;
-        let px = self.style.with(self.patch).font_size;
+        let face = self.style.computed(ui.theme.text()).font;
+        let px = self.style.computed(ui.theme.text()).font_size;
         let buffer = self.buffer;
         let chars: Vec<char> = buffer.chars().collect();
 
@@ -66,7 +64,7 @@ impl Widget for TextInput<'_> {
         } else {
             Color::GRAY_800
         };
-        ui.fill(rect, bg);
+        ui.surface(rect, bg);
 
         let mut submitted = false;
         if focused {
@@ -182,7 +180,7 @@ impl Widget for TextInput<'_> {
             if lo < hi {
                 let x0 = caret_x(rect, &chars, lo, face, px);
                 let x1 = caret_x(rect, &chars, hi, face, px);
-                ui.fill(Rect::new(x0, ty, x1 - x0, px), Color::SLATE_600);
+                ui.surface(Rect::new(x0, ty, x1 - x0, px), Color::SLATE_600);
             }
         }
 
@@ -191,7 +189,7 @@ impl Widget for TextInput<'_> {
         if focused && ui.caret_on() {
             let caret = ui.caret_sel().0.min(chars.len());
             let cx = caret_x(rect, &chars, caret, face, px);
-            ui.fill(Rect::new(cx, ty, 2.0, px), Color::INDIGO_50);
+            ui.surface(Rect::new(cx, ty, 2.0, px), Color::INDIGO_50);
         }
 
         submitted

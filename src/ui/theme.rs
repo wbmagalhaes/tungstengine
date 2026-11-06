@@ -1,5 +1,5 @@
 use crate::color::Color;
-use crate::ui::style::Style;
+use crate::ui::style::{ComputedStyle, Style, StyleStates};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Theme {
@@ -25,6 +25,9 @@ pub struct Theme {
     pub selected: Color,
     pub tooltip_bg: Color,
     pub font_size: f32,
+    pub border_radius: f32,
+    pub gap: f32,
+    pub pad: f32,
 }
 
 impl Default for Theme {
@@ -52,24 +55,59 @@ impl Default for Theme {
             selected: Color::ORANGE_300,
             tooltip_bg: Color::GRAY_950.with_alpha(0.95),
             font_size: 16.0,
+            border_radius: 0.0,
+            gap: 8.0,
+            pad: 12.0,
         }
     }
 }
 
 impl Theme {
-    pub fn button(&self, enabled: bool) -> Style {
+    pub fn base(&self) -> ComputedStyle {
+        ComputedStyle {
+            border_radius: [self.border_radius; 4],
+            ..ComputedStyle::BASE
+        }
+    }
+
+    pub fn text(&self) -> ComputedStyle {
+        ComputedStyle {
+            border_radius: [self.border_radius; 4],
+            ..ComputedStyle::TEXT
+        }
+    }
+
+    pub fn panel(&self) -> ComputedStyle {
+        ComputedStyle {
+            border_radius: [self.border_radius; 4],
+            gap: (self.gap, self.gap),
+            pad: [self.pad; 4],
+            ..ComputedStyle::PANEL
+        }
+    }
+
+    pub fn button(&self, enabled: bool) -> StyleStates {
         let (bg, fg) = if enabled {
             (self.button_bg, self.button_fg)
         } else {
             (self.disabled_bg, self.disabled_fg)
         };
-        Style {
-            bg,
-            fg,
-            font_size: self.font_size,
-            hover_color: Some(if enabled { self.button_hover } else { bg }),
-            active_color: Some(self.button_active),
-            ..Style::DEFAULT_BUTTON
+        StyleStates {
+            normal: ComputedStyle {
+                bg,
+                fg,
+                font_size: self.font_size,
+                border_radius: [self.border_radius; 4],
+                ..ComputedStyle::BUTTON
+            },
+            hover: Style {
+                bg: Some(if enabled { self.button_hover } else { bg }),
+                ..Style::default()
+            },
+            active: Style {
+                bg: Some(self.button_active),
+                ..Style::default()
+            },
         }
     }
 }

@@ -74,7 +74,7 @@ impl Widget for Stepper<'_> {
             } else {
                 t.track_off
             };
-            ui.fill(cell, color);
+            ui.surface(cell, color);
             if ui.interact_id(cell, (self.id, "seg", i)).clicked() {
                 next = if level == i + 1 { i } else { i + 1 };
             }

@@ -5,7 +5,7 @@ use crate::ui::font;
 use crate::ui::immediate::{UI, key_hash};
 use crate::ui::input::{delete_selection, next_word, prev_word};
 use crate::ui::rect::Rect;
-use crate::ui::style::{Style, StylePatch, Styled};
+use crate::ui::style::{Style, Styled};
 use crate::ui::widget::Widget;
 
 const PAD: f32 = 6.0;
@@ -15,7 +15,6 @@ pub struct TextArea<'a> {
     id: u64,
     buffer: &'a mut String,
     style: Style,
-    patch: StylePatch,
 }
 
 struct Row {
@@ -105,8 +104,7 @@ impl<'a> TextArea<'a> {
             rect,
             id: key_hash(id),
             buffer,
-            style: Style::DEFAULT_TEXT,
-            patch: StylePatch::default(),
+            style: Style::default(),
         }
     }
 
@@ -120,8 +118,8 @@ impl<'a> TextArea<'a> {
 }
 
 impl Styled for TextArea<'_> {
-    fn patch_mut(&mut self) -> &mut StylePatch {
-        &mut self.patch
+    fn style_mut(&mut self) -> &mut Style {
+        &mut self.style
     }
 }
 
@@ -130,8 +128,8 @@ impl Widget for TextArea<'_> {
 
     fn render(self, ui: &mut UI) -> bool {
         let rect = self.rect;
-        let face = self.style.with(self.patch).font;
-        let px = self.style.with(self.patch).font_size;
+        let face = self.style.computed(ui.theme.text()).font;
+        let px = self.style.computed(ui.theme.text()).font_size;
         let lh = font::line_height(face, px);
         let inner_w = rect.w - PAD * 2.0;
         let buffer = self.buffer;
@@ -157,7 +155,7 @@ impl Widget for TextArea<'_> {
         if focused {
             ui.mark_keyboard();
         }
-        ui.fill(
+        ui.surface(
             rect,
             if focused {
                 Color::GRAY_700
@@ -288,7 +286,7 @@ impl Widget for TextArea<'_> {
             if focused && lo < hi && lo <= row.end && hi >= row.start {
                 let x0 = x_in_row(&chars, row, lo.max(row.start), face, px);
                 let x1 = x_in_row(&chars, row, hi.min(row.end), face, px);
-                ui.fill(
+                ui.surface(
                     Rect::new(rect.x + PAD + x0, y, (x1 - x0).max(2.0), lh),
                     Color::SLATE_600,
                 );
@@ -300,7 +298,7 @@ impl Widget for TextArea<'_> {
             let r = row_of(&rows, caret);
             let x = x_in_row(&chars, &rows[r], caret, face, px);
             let y = rect.y + PAD + r as f32 * lh;
-            ui.fill(Rect::new(rect.x + PAD + x, y, 2.0, lh), Color::INDIGO_50);
+            ui.surface(Rect::new(rect.x + PAD + x, y, 2.0, lh), Color::INDIGO_50);
         }
         changed
     }

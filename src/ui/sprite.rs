@@ -14,6 +14,35 @@ pub struct DrawRect {
     pub quad: Option<[[f32; 2]; 4]>,
     pub uvs: Option<[[f32; 2]; 4]>,
     pub silhouette: bool,
+    pub clip_round: Option<ClipRound>,
+    pub round: Option<RoundShape>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ClipRound {
+    pub center: [f32; 2],
+    pub half: [f32; 2],
+    pub radii: [f32; 4],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RoundGradient {
+    pub via: [f32; 4],
+    pub to: [f32; 4],
+    pub angle: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RoundShape {
+    pub center: [f32; 2],
+    pub half: [f32; 2],
+    pub radii: [f32; 4],
+    pub rotation: f32,
+    pub sweep: Option<(f32, [f32; 4])>,
+    pub blur: f32,
+    pub gradient: Option<RoundGradient>,
+    pub border: f32,
+    pub border_color: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
