@@ -20,6 +20,7 @@ pub struct Dialog {
     pub text: String,
     pub options: Vec<String>,
     pub elapsed: f32,
+    pub(super) spoken: usize,
     pub auto: bool,
     pub focus: usize,
     pub mood: Option<String>,
@@ -100,6 +101,7 @@ impl Dialog {
         } else {
             self.text = self.queue.remove(0);
             self.elapsed = 0.0;
+            self.spoken = 0;
         }
     }
 
@@ -161,6 +163,7 @@ impl Dialog {
                 self.text = text;
                 self.options.clear();
                 self.elapsed = 0.0;
+                self.spoken = 0;
             }
             Presentation::Options(opts) => {
                 self.options = opts;

@@ -11,6 +11,12 @@ pub struct Voice {
     pub pitch: f32,
     #[serde(default = "default_variation")]
     pub variation: f32,
+    #[serde(default = "default_tract")]
+    pub tract: f32,
+    #[serde(default)]
+    pub brightness: f32,
+    #[serde(default = "default_roughness")]
+    pub roughness: f32,
 }
 
 impl Default for Voice {
@@ -18,8 +24,19 @@ impl Default for Voice {
         Voice {
             pitch: 1.0,
             variation: 0.2,
+            tract: 1.0,
+            brightness: 0.0,
+            roughness: 0.5,
         }
     }
+}
+
+fn default_roughness() -> f32 {
+    0.5
+}
+
+fn default_tract() -> f32 {
+    1.0
 }
 
 fn default_variation() -> f32 {

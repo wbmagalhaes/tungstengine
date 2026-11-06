@@ -16,6 +16,17 @@ const PULSE_SPEED: f32 = 5.0;
 const PULSE_SPREAD: f32 = 0.4;
 const ICON_MARK: char = '\u{FFFC}';
 
+const COMMA_WAIT: f32 = 0.15;
+const STOP_WAIT: f32 = 0.35;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Delivery {
+    #[default]
+    Normal,
+    Shout,
+    Whisper,
+}
+
 #[derive(Clone, Debug, Default)]
 struct Look {
     color: Option<Color>,
@@ -27,6 +38,7 @@ struct Look {
     rainbow: bool,
     pulse: bool,
     speed: Option<f32>,
+    delivery: Delivery,
 }
 
 #[derive(Clone, Debug)]
@@ -38,6 +50,10 @@ pub struct RichChar {
 }
 
 impl RichChar {
+    pub fn delivery(&self) -> Delivery {
+        self.look.delivery
+    }
+
     fn font(&self) -> Font {
         match (self.look.bold, self.look.italic) {
             (true, true) => Font::BoldItalic,
@@ -59,6 +75,15 @@ fn apply(look: &mut Look, name: &str, value: Option<&str>) -> bool {
         ("i", _) => look.italic = true,
         ("wave", _) => look.wave = true,
         ("shake", _) => look.shake = true,
+        ("shout", _) => {
+            look.delivery = Delivery::Shout;
+            look.bold = true;
+            look.shake = true;
+        }
+        ("whisper", _) => {
+            look.delivery = Delivery::Whisper;
+            look.italic = true;
+        }
         ("rainbow", _) => look.rainbow = true,
         ("pulse", _) => look.pulse = true,
         _ => return false,
@@ -120,18 +145,34 @@ pub fn parse_rich(text: &str) -> Vec<RichChar> {
     out
 }
 
-fn char_time(c: &RichChar, per_second: f32) -> f32 {
-    c.pause + 1.0 / (per_second * c.look.speed.unwrap_or(1.0)).max(0.01)
+fn punctuation_wait(previous: Option<&RichChar>, c: &RichChar) -> f32 {
+    if !c.ch.is_whitespace() {
+        return 0.0;
+    }
+    let wait = match previous.map(|p| p.ch) {
+        Some(',' | ';' | ':') => COMMA_WAIT,
+        Some('.' | '?' | '!' | '…') => STOP_WAIT,
+        _ => 0.0,
+    };
+    wait / c.look.speed.unwrap_or(1.0).max(0.01)
+}
+
+fn char_times(chars: &[RichChar], per_second: f32) -> impl Iterator<Item = f32> {
+    chars.iter().enumerate().map(move |(i, c)| {
+        let previous = i.checked_sub(1).map(|p| &chars[p]);
+        let typing = 1.0 / (per_second * c.look.speed.unwrap_or(1.0)).max(0.01);
+        c.pause + punctuation_wait(previous, c) + typing
+    })
 }
 
 pub fn typing_time(chars: &[RichChar], per_second: f32) -> f32 {
-    chars.iter().map(|c| char_time(c, per_second)).sum()
+    char_times(chars, per_second).sum()
 }
 
 pub fn typed_count(chars: &[RichChar], elapsed: f32, per_second: f32) -> usize {
     let mut spent = 0.0;
-    for (i, c) in chars.iter().enumerate() {
-        spent += char_time(c, per_second);
+    for (i, time) in char_times(chars, per_second).enumerate() {
+        spent += time;
         if spent > elapsed {
             return i;
         }
@@ -294,6 +335,32 @@ impl Widget for RichText<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn punctuation_holds_the_typing_after_it() {
+        let time = |text: &str| typing_time(&parse_rich(text), 100.0);
+        let base = time("ab cd");
+        assert!((time("a, cd") - base - COMMA_WAIT).abs() < 0.001);
+        assert!((time("a. cd") - base - STOP_WAIT).abs() < 0.001);
+        assert!((time("a? cd") - base - STOP_WAIT).abs() < 0.001);
+        assert!((time("a! cd") - base - STOP_WAIT).abs() < 0.001);
+    }
+
+    #[test]
+    fn punctuation_only_waits_before_a_space() {
+        let time = |text: &str| typing_time(&parse_rich(text), 100.0);
+        assert_eq!(time("abc."), time("abcd"));
+        assert_eq!(time("3.14"), time("abcd"));
+        assert!((time("a... b") - time("abcde f") + 0.01 - STOP_WAIT).abs() < 0.001);
+    }
+
+    #[test]
+    fn the_stop_shows_before_the_wait() {
+        let chars = parse_rich("a. b");
+        assert_eq!(typed_count(&chars, 0.03, 100.0), 2);
+        assert_eq!(typed_count(&chars, 0.2, 100.0), 2);
+        assert_eq!(typed_count(&chars, 0.5, 100.0), 4);
+    }
 
     fn plain(chars: &[RichChar]) -> String {
         chars.iter().map(|c| c.ch).collect()

@@ -49,7 +49,7 @@ pub use keybind_input::KeybindInput;
 pub use panel::Panel;
 pub use radio_group::RadioGroup;
 pub use response::Response;
-pub use rich_text::{RichChar, RichText, parse_rich, typed_count, typing_time};
+pub use rich_text::{Delivery, RichChar, RichText, parse_rich, typed_count, typing_time};
 pub use scroll_view::{ScrollAxis, ScrollView};
 pub use slider::Slider;
 pub use slot::{Slot, slot_ghost, slot_pick};

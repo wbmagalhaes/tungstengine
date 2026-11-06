@@ -1,3 +1,4 @@
+use crate::audio::{Audio, Volume};
 use crate::color::Color;
 use crate::ecs::prelude::*;
 use crate::localization::Localization;
@@ -7,6 +8,7 @@ use crate::ui::{
     typed_count, typing_time,
 };
 
+use super::mumble::vowel_between;
 use super::{Dialog, PortraitSide};
 
 const SIDE: f32 = 40.0;
@@ -154,13 +156,19 @@ pub fn conversation(world: &mut World, ui: &mut UI) -> bool {
     }
     let full_screen = Rect::new(0.0, 0.0, ui.width, ui.height).with_z(Z - 0.5);
     let edit = ui.edit_input();
-    let confirm = edit.enter || edit.typed.contains(' ');
-    let click = ui.clicked || confirm;
+    let settled = dialog.elapsed > 0.0;
+    let confirm = settled && (edit.enter || edit.typed.contains(' '));
+    let click = settled && ui.clicked || confirm;
     ui.block_pointer(full_screen);
 
     let chars = parse_rich(&dialog.text);
     let typed = typed_count(&chars, dialog.elapsed, TYPE_SPEED);
     let done = typed >= chars.len();
+    let sound = dialog
+        .speaker
+        .as_ref()
+        .and_then(|s| vowel_between(&chars, dialog.spoken, typed, s.voice));
+    dialog.spoken = dialog.spoken.max(typed);
     let full_text = dialog.text.clone();
     let name = name.unwrap_or_default();
     let accent = dialog.speaker.as_ref().map_or(ui.theme.accent, |s| {
@@ -215,8 +223,15 @@ pub fn conversation(world: &mut World, ui: &mut UI) -> bool {
         dialog.advance();
     } else if click && !done {
         dialog.elapsed = typing_time(&chars, TYPE_SPEED);
+        dialog.spoken = chars.len();
     } else {
         dialog.elapsed += dt;
+    }
+    if let Some(sound) = sound {
+        let gain = world.resource::<Volume>().copied().unwrap_or_default().sfx;
+        if let Ok(audio) = world.resource::<Audio>() {
+            audio.vowel(sound, gain);
+        }
     }
     true
 }
