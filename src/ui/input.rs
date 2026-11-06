@@ -4,6 +4,7 @@ pub struct EditInput {
     pub backspace: bool,
     pub delete: bool,
     pub enter: bool,
+    pub escape: bool,
     pub left: bool,
     pub right: bool,
     pub up: bool,

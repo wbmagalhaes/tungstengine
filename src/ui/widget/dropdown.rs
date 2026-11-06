@@ -7,7 +7,7 @@ use crate::ui::widget::TextInput;
 use crate::ui::widget::checkbox::check_box;
 use std::hash::Hash;
 
-use crate::ui::immediate::{FIELD_PAD, LineIcon, TextEdit, UI, key_hash};
+use crate::ui::immediate::{FIELD_PAD, LineIcon, UI, key_hash};
 use crate::ui::rect::Rect;
 use crate::ui::widget::Widget;
 
@@ -24,7 +24,7 @@ const POPOVER_SHIFT: f32 = -8.0;
 const ARROW_SIZE: f32 = 9.0;
 const SCROLL_GUTTER: f32 = 10.0;
 const ROW_HOVER_TINT: f32 = 0.08;
-const CURRENT_BAR_INSET: f32 = 9.0;
+const CHECK_SIZE: f32 = 11.0;
 const HEAD_HOVER: Transition = Transition::new(0.1, Ease::OutQuad).exit(0.18, Ease::InOutQuad);
 
 const MAX_ROWS: usize = 8;
@@ -45,7 +45,8 @@ fn decor_rect(row: Rect, right: f32) -> Rect {
 pub struct DropState {
     pub open: bool,
     pub search: String,
-    pub search_placeholder: Option<&'static str>,
+    pub search_placeholder: Option<String>,
+    pub searchable: bool,
 }
 
 fn popover_anim() -> Anim {
@@ -126,7 +127,7 @@ fn popup(
     ui: &mut UI,
     (r, id): (Rect, u64),
     options: &[&str],
-    (state, _): (&mut DropState, &TextEdit),
+    state: &mut DropState,
     decorate: Option<Decorate>,
     mark: impl Fn(&str) -> Mark,
 ) -> Option<String> {
@@ -134,12 +135,15 @@ fn popup(
     let size = t.font_size;
     let z = r.z + 1.0;
     let search = Rect::new(r.x, r.y + r.h + DROP_GAP, r.w, r.h).with_z(z);
-    let hint = state.search_placeholder.unwrap_or("Search…");
-    let top = t.border_radius;
-    let input = TextInput::new(search, (id, "search"), &mut state.search)
-        .placeholder(hint)
-        .border_radius_corners(top, top, 0.0, 0.0);
-    ui.add(input);
+    let hide = !state.searchable;
+    if !hide {
+        let hint = state.search_placeholder.as_deref().unwrap_or("Search…");
+        let top = t.border_radius;
+        let input = TextInput::new(search, (id, "search"), &mut state.search)
+            .placeholder(hint)
+            .border_radius_corners(top, top, 0.0, 0.0);
+        ui.add(input);
+    }
     let needle = state.search.to_lowercase();
     let shown: Vec<&str> = options
         .iter()
@@ -148,13 +152,14 @@ fn popup(
         .collect();
     let view = Rect::new(
         r.x,
-        search.y + r.h,
+        if hide { search.y } else { search.y + r.h },
         r.w,
         r.h * shown.len().clamp(1, MAX_ROWS) as f32,
     )
     .with_z(z);
     let offset = ui.scroll_area((id, "scroll"), view, r.h * shown.len() as f32, t.accent);
-    let bottom = [0.0, 0.0, t.border_radius, t.border_radius];
+    let edge = if hide { t.border_radius } else { 0.0 };
+    let bottom = [edge, edge, t.border_radius, t.border_radius];
     ui.fill_corners(view, t.field_bg, bottom, 1.0, t.panel_border);
     let mut picked = None;
     ui.push_clip_corners(view, bottom);
@@ -174,11 +179,13 @@ fn popup(
         }
         let current = matches!(m, Mark::Current);
         if current {
-            let height = row.h - CURRENT_BAR_INSET * 2.0;
-            let bar = Rect::new(row.x + 3.0, row.y + CURRENT_BAR_INSET, 3.0, height);
-            ui.fill_round(bar.with_z(row.z + 0.001), t.accent, 1.5);
+            let center = (
+                row.x + row.w - FIELD_PAD - CHECK_SIZE / 2.0,
+                row.y + row.h / 2.0,
+            );
+            ui.icon_line(LineIcon::Check, center, CHECK_SIZE, t.accent, row.z + 0.002);
         }
-        let mut tx = row.x + if current { FIELD_PAD + 4.0 } else { FIELD_PAD };
+        let mut tx = row.x + FIELD_PAD;
         if matches!(m, Mark::Checked(_) | Mark::Unchecked | Mark::Disabled) {
             let bx =
                 Rect::new(row.x + 6.0, row.y + (row.h - 14.0) / 2.0, 14.0, 14.0).with_z(z + 0.002);
@@ -198,7 +205,7 @@ fn popup(
         }
         let fg = match m {
             Mark::Disabled => t.label.with_alpha(0.4),
-            Mark::Current => t.accent,
+            Mark::Current => t.button_fg,
             Mark::Checked(_) => t.button_fg,
             _ => t.label,
         };
@@ -224,7 +231,6 @@ pub struct Dropdown<'a> {
     options: &'a [&'a str],
     selected: &'a mut String,
     state: &'a mut DropState,
-    edit: &'a TextEdit,
     decorate: Option<Decorate<'a>>,
     placeholder: Option<&'a str>,
     clearable: bool,
@@ -237,7 +243,6 @@ impl<'a> Dropdown<'a> {
         options: &'a [&'a str],
         selected: &'a mut String,
         state: &'a mut DropState,
-        edit: &'a TextEdit,
         id: impl Hash,
     ) -> Self {
         Dropdown {
@@ -245,7 +250,6 @@ impl<'a> Dropdown<'a> {
             options,
             selected,
             state,
-            edit,
             decorate: None,
             placeholder: None,
             clearable: false,
@@ -304,7 +308,7 @@ impl Widget for Dropdown<'_> {
                     ui,
                     (self.rect, self.id),
                     self.options,
-                    (self.state, self.edit),
+                    self.state,
                     self.decorate,
                     |o| {
                         if o == current {
@@ -335,7 +339,6 @@ pub struct MultiSelect<'a> {
     options: &'a [&'a str],
     selected: &'a mut Vec<String>,
     state: &'a mut DropState,
-    edit: &'a TextEdit,
     max: usize,
     placeholder: Option<&'a str>,
     clearable: bool,
@@ -348,7 +351,6 @@ impl<'a> MultiSelect<'a> {
         options: &'a [&'a str],
         selected: &'a mut Vec<String>,
         state: &'a mut DropState,
-        edit: &'a TextEdit,
         id: impl Hash,
     ) -> Self {
         MultiSelect {
@@ -356,7 +358,6 @@ impl<'a> MultiSelect<'a> {
             options,
             selected,
             state,
-            edit,
             max: usize::MAX,
             placeholder: None,
             clearable: false,
@@ -409,7 +410,7 @@ impl Widget for MultiSelect<'_> {
                     ui,
                     (self.rect, self.id),
                     self.options,
-                    (self.state, self.edit),
+                    self.state,
                     None,
                     |o| match chosen.iter().position(|s| s == o) {
                         Some(p) => Mark::Checked(p),

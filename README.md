@@ -189,6 +189,10 @@ Set `pixel_perfect = true` in `manifest.toml` for pixel art: sprites land on who
 
 `Tabs` is a segmented control with a sliding fill, `Stepper` lights its pills one by one.
 
+`Divider::horizontal(x, y, length)` and `Divider::vertical` draw a line that fades out, `.solid()` keeps it even, and `.label(text)` puts a title before a horizontal line.
+
+Also in `ui`: `ProgressBar`, `Spinner`, `Badge`, `IconButton`, `Dialog`, `Toasts`, `ContextMenu`, `ScrollView` (vertical, horizontal or both with `.axis`, Shift and the wheel scroll sideways), `Accordion`, `RadioGroup`, `Slot` and `KeybindInput`. Pointer checks respect the current clip, so widgets scrolled out of view take no clicks.
+
 ## UI lists
 
 Widgets get their identity from their label, so repeated labels need a key. Debug builds warn when a label repeats in a frame.

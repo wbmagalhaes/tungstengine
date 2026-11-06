@@ -56,10 +56,10 @@ pub struct Style {
     pub backdrop_blur: Option<f32>,
     pub outline_sweep: Option<Color>,
     pub outline_sweep_speed: Option<f32>,
-    pub scale: Option<(f32, f32)>,
     pub z: Option<f32>,
     pub translate: Option<(f32, f32)>,
     pub rotate: Option<f32>,
+    pub scale: Option<(f32, f32)>,
     pub gradient: Option<LinearGradient>,
     pub transition: Option<Transition>,
 }
@@ -82,10 +82,10 @@ pub struct ComputedStyle {
     pub backdrop_blur: f32,
     pub outline_sweep: Color,
     pub outline_sweep_speed: f32,
-    pub scale: (f32, f32),
     pub z: f32,
     pub translate: (f32, f32),
     pub rotate: f32,
+    pub scale: (f32, f32),
     pub gradient: Option<LinearGradient>,
     pub transition: Transition,
 }
@@ -321,6 +321,9 @@ pub trait Styled: Sized {
     fn font(mut self, font: Font) -> Self {
         self.style_mut().font = Some(font);
         self
+    }
+    fn sans(self) -> Self {
+        self.font(Font::Sans)
     }
     fn mono(self) -> Self {
         self.font(Font::Mono)

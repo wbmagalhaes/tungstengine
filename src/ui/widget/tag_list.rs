@@ -2,7 +2,7 @@ use crate::animation::Ease;
 use crate::ui::style::Transition;
 use std::hash::Hash;
 
-use crate::ui::immediate::{LineIcon, TextEdit, UI, key_hash};
+use crate::ui::immediate::{LineIcon, UI, key_hash};
 use crate::ui::rect::Rect;
 use crate::ui::widget::TextInput;
 use crate::ui::widget::Widget;
@@ -14,6 +14,7 @@ pub struct TagList<'a> {
     rect: Rect,
     tags: &'a mut Vec<String>,
     input: &'a mut String,
+    placeholder: Option<&'a str>,
     id: u64,
 }
 
@@ -27,15 +28,20 @@ impl<'a> TagList<'a> {
         rect: Rect,
         tags: &'a mut Vec<String>,
         input: &'a mut String,
-        _edit: &'a TextEdit,
         id: impl Hash,
     ) -> Self {
         TagList {
             rect,
             tags,
             input,
+            placeholder: None,
             id: key_hash(id),
         }
+    }
+
+    pub fn placeholder(mut self, text: &'a str) -> Self {
+        self.placeholder = Some(text);
+        self
     }
 }
 
@@ -93,7 +99,8 @@ impl Widget for TagList<'_> {
         let field = Rect::new(x, y, field_w, h).with_z(r.z);
         let mut changed = false;
         let field_id = (self.id, "add");
-        let input = TextInput::new(field, field_id, self.input).placeholder("Add…");
+        let input = TextInput::new(field, field_id, self.input)
+            .placeholder(self.placeholder.unwrap_or("Add…"));
         if ui.add(input) {
             ui.set_focus(Some(key_hash(field_id)));
             let tag = self.input.trim().to_string();

@@ -9,7 +9,6 @@ use crate::ui::style::{ComputedStyle, LinearGradient, Transition};
 use crate::ui::widget::Widget;
 
 const INSET: f32 = 3.0;
-const INSET_X: f32 = 3.0;
 const FILL_START_ALPHA: f32 = 0.4;
 const FILL_END_ALPHA: f32 = 0.9;
 const HOVER_TINT: f32 = 0.08;
@@ -57,7 +56,10 @@ impl Widget for Tabs<'_> {
     fn render(self, ui: &mut UI) -> Option<usize> {
         let t = ui.theme;
         let at = self.rect;
-        let total = self.width * self.labels.len() as f32;
+        let count = self.labels.len() as f32;
+        let total = self.width * count;
+        let pill_w = (total - INSET * (count + 1.0)) / count;
+        let stride = pill_w + INSET;
         let track = Rect::new(at.x, at.y, total, at.h).with_z(at.z);
         ui.field_box(track, false);
         let target = self.selected as f32;
@@ -65,9 +67,9 @@ impl Widget for Tabs<'_> {
         let radius = (t.border_radius - INSET).max(0.0);
         if self.selected < self.labels.len() {
             let pill = Rect::new(
-                at.x + spot * self.width + INSET_X,
+                at.x + INSET + spot * stride,
                 at.y + INSET,
-                self.width - INSET_X * 2.0,
+                pill_w,
                 at.h - INSET * 2.0,
             )
             .with_z(at.z + 0.001);
@@ -86,17 +88,17 @@ impl Widget for Tabs<'_> {
         let size = t.font_size;
         let mut pick = None;
         for (k, label) in self.labels.iter().enumerate() {
-            let cell = Rect::new(at.x + k as f32 * self.width, at.y, self.width, at.h).with_z(at.z);
+            let cell = Rect::new(
+                at.x + INSET + k as f32 * stride,
+                at.y + INSET,
+                pill_w,
+                at.h - INSET * 2.0,
+            )
+            .with_z(at.z);
             let resp = ui.interact_curved(cell, (self.id, k), HOVER);
             let chosen = k == self.selected;
             if !chosen && resp.hover() > 0.0 {
-                let glow = Rect::new(
-                    cell.x + INSET_X,
-                    cell.y + INSET,
-                    cell.w - INSET_X * 2.0,
-                    cell.h - INSET * 2.0,
-                )
-                .with_z(at.z + 0.001);
+                let glow = cell.with_z(at.z + 0.001);
                 ui.fill_round(
                     glow,
                     t.button_fg.with_alpha(HOVER_TINT * resp.hover()),

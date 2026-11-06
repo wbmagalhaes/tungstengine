@@ -22,6 +22,14 @@ use crate::sprites::SpriteArg;
 
 pub const FIELD_PAD: f32 = 10.0;
 const ROUND_BLEED: f32 = 1.0;
+const SCROLL_STEP: f32 = 60.0;
+const SCROLL_GRAB: f32 = 10.0;
+
+#[derive(Clone, Copy, Default)]
+struct ScrollState {
+    offset: (f32, f32),
+    drag: Option<bool>,
+}
 const PLACEHOLDER_ALPHA: f32 = 0.45;
 const HOVER_TRANSITION: Transition =
     Transition::new(0.12, Ease::OutCubic).exit(0.22, Ease::InOutQuad);
@@ -135,6 +143,7 @@ pub enum LineIcon {
     Minus,
     Plus,
     Cross,
+    Check,
     ChevronDown,
     ChevronUp,
 }
@@ -171,6 +180,7 @@ pub struct UI {
     down: bool,
     wheel: f32,
     scrolls: IdMap<(f32, Option<f32>)>,
+    scroll_views: IdMap<ScrollState>,
     repeats: IdMap<(f32, f32)>,
     states: IdMap<Box<dyn std::any::Any>>,
     pub theme: Theme,
@@ -341,6 +351,10 @@ impl UI {
 
     pub fn art(&self, sprite: impl SpriteArg) -> SpriteDraw {
         sprite.resolve(&self.sprites.borrow())
+    }
+
+    pub fn elapsed(&self) -> f32 {
+        self.elapsed
     }
 
     pub fn dt(&self) -> f32 {
@@ -834,6 +848,64 @@ impl UI {
         fire
     }
 
+    pub fn scroll_view(
+        &mut self,
+        id: u64,
+        view: Rect,
+        content: (f32, f32),
+        (horizontal, vertical): (bool, bool),
+    ) -> (f32, f32) {
+        let mut state = self.scroll_views.get(&id).copied().unwrap_or_default();
+        let max = (
+            if horizontal {
+                (content.0 - view.w).max(0.0)
+            } else {
+                0.0
+            },
+            if vertical {
+                (content.1 - view.h).max(0.0)
+            } else {
+                0.0
+            },
+        );
+        if view.contains(self.cursor) && self.wheel != 0.0 {
+            let sideways = !vertical || (horizontal && self.edit.shift);
+            let step = self.wheel * SCROLL_STEP;
+            if sideways {
+                state.offset.0 -= step;
+            } else {
+                state.offset.1 -= step;
+            }
+        }
+        let bar_x = Rect::new(view.x, view.y + view.h - SCROLL_GRAB, view.w, SCROLL_GRAB);
+        let bar_y = Rect::new(view.x + view.w - SCROLL_GRAB, view.y, SCROLL_GRAB, view.h);
+        if self.down {
+            if max.1 > 0.0 && bar_y.with_z(view.z + 0.1).contains(self.cursor) {
+                state.drag = Some(false);
+            } else if max.0 > 0.0 && bar_x.with_z(view.z + 0.1).contains(self.cursor) {
+                state.drag = Some(true);
+            }
+        }
+        match state.drag {
+            Some(true) => {
+                state.offset.0 = (self.cursor.0 - view.x) / view.w.max(1.0) * max.0;
+            }
+            Some(false) => {
+                state.offset.1 = (self.cursor.1 - view.y) / view.h.max(1.0) * max.1;
+            }
+            None => {}
+        }
+        if !self.pressed {
+            state.drag = None;
+        }
+        state.offset = (
+            state.offset.0.clamp(0.0, max.0),
+            state.offset.1.clamp(0.0, max.1),
+        );
+        self.scroll_views.insert(id, state);
+        state.offset
+    }
+
     pub fn scroll_area(&mut self, id: impl Hash, view: Rect, content_h: f32, color: Color) -> f32 {
         let key = key_hash(id);
         let max = (content_h - view.h).max(0.0);
@@ -976,7 +1048,11 @@ impl UI {
 
     pub fn pointer_over(&mut self, rect: Rect) -> bool {
         let blocker = self.capture_z.max(self.block_z);
-        let over = rect.contains(self.cursor) && rect.z >= blocker;
+        let visible = self
+            .clip_stack
+            .last()
+            .is_none_or(|c| c.contains(self.cursor));
+        let over = rect.contains(self.cursor) && rect.z >= blocker && visible;
         if over {
             self.pointer_used = true;
             self.block_z = self.block_z.max(rect.z);
@@ -1357,6 +1433,11 @@ impl UI {
             LineIcon::Cross => {
                 self.line_z((x - h, y - h), (x + h, y + h), color, width, z);
                 self.line_z((x - h, y + h), (x + h, y - h), color, width, z);
+            }
+            LineIcon::Check => {
+                let elbow = (x - h * 0.2, y + h * 0.7);
+                self.line_z((x - h, y), elbow, color, width, z);
+                self.line_z(elbow, (x + h, y - h * 0.7), color, width, z);
             }
             LineIcon::ChevronDown | LineIcon::ChevronUp => {
                 let tip = if matches!(icon, LineIcon::ChevronDown) {
@@ -2066,6 +2147,10 @@ impl UI {
 
     pub fn cursor(&self) -> (f32, f32) {
         self.cursor
+    }
+
+    pub fn pointer_edge(&self) -> bool {
+        self.down
     }
 
     pub fn pointer_down(&self) -> bool {

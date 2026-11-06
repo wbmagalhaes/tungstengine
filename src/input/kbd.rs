@@ -52,6 +52,7 @@ impl Input {
             backspace: self.key_pressed(KeyCode::Backspace),
             delete: self.key_pressed(KeyCode::Delete),
             enter: self.key_pressed(KeyCode::Enter),
+            escape: self.key_pressed(KeyCode::Escape),
             left: self.key_pressed(KeyCode::ArrowLeft),
             right: self.key_pressed(KeyCode::ArrowRight),
             up: self.key_pressed(KeyCode::ArrowUp),

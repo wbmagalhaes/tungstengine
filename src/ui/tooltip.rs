@@ -1,7 +1,7 @@
 use crate::color::Color;
 use crate::ui::{Rect, SpriteDraw, Styled, Text, UI, Widget};
 
-pub const Z_TOOLTIP: f32 = 12.0;
+pub const Z_TOOLTIP: f32 = 1000.0;
 
 #[derive(Clone, Copy)]
 pub enum TipAt {

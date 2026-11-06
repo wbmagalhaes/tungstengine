@@ -25,7 +25,7 @@ pub use fan::fan_split;
 pub use feedback::{DENY_SECS, deny_bubble, deny_shake};
 pub use font::{Font, atlas_pixels, atlas_size, configure_fonts, take_dirty_rows};
 pub use immediate::{
-    FieldLook, FieldResponse, PixelPerfect, TextEdit, TextRec, UI, clip_half_plane,
+    FieldLook, FieldResponse, LineIcon, PixelPerfect, TextEdit, TextRec, UI, clip_half_plane,
 };
 pub use input::{CursorInput, EditInput};
 pub use layout::{Dir, Layout};
@@ -37,7 +37,10 @@ pub use style::{ComputedStyle, LinearGradient, Stateful, Style, StyleStates, Sty
 pub use theme::Theme;
 pub use tooltip::{Tip, TipAt, TipPart, Z_TOOLTIP};
 pub use widget::{
-    Backdrop, Button, Checkbox, Chip, ColorList, ColorPicker, DropState, Dropdown, Frame, Group,
-    MultiSelect, Panel, Response, Slider, Stepper, Switch, Tabs, TagList, Text, TextArea,
-    TextInput, Widget, button, button_outlined, hold_button, repeat_button,
+    Accordion, AccordionState, Backdrop, Badge, Button, Checkbox, Chip, ColorList, ColorPicker,
+    Divider, DropState, Dropdown, Frame, Group, Icon, IconButton, KeybindInput, MultiSelect, Panel,
+    ProgressBar, RadioGroup, Response, ScrollAxis, ScrollView, Slider, Slot, Spinner, Stepper,
+    Switch, Tabs, TagList, Text, TextArea, TextInput, Widget, button, button_outlined, hold_button,
+    repeat_button, slot_ghost, slot_pick,
 };
+pub use widget::{ContextMenu, ContextState, Dialog, DialogEvent, MenuItem, Toasts};
