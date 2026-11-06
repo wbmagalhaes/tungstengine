@@ -107,6 +107,7 @@ pub enum Vowel {
 pub struct VowelSound {
     pub freq: f32,
     pub vowel: Vowel,
+    pub blend: Vowel,
     pub tract: f32,
     pub brightness: f32,
     pub gain: f32,
@@ -236,12 +237,13 @@ impl Vowel {
     }
 }
 
-const VOWEL_LENGTH: f32 = 0.085;
+pub const VOWEL_LENGTH: f32 = 0.085;
 const VOWEL_SWELL: f32 = 0.2;
 const VOWEL_RELEASE: f32 = 0.25;
 const WHISPER_LENGTH: f32 = 0.12;
 const WHISPER_DAMPING: f32 = 0.25;
 const WHISPER_LEVEL: f32 = 0.2;
+const GOLDEN_RATIO: f32 = 0.618_034;
 const JITTER: f32 = 0.015;
 const SHIMMER: f32 = 0.14;
 const BREATH: f32 = 0.04;
@@ -255,6 +257,7 @@ const HARMONICS: usize = 32;
 struct VowelTone {
     freqs: [f32; HARMONICS],
     weights: [f32; HARMONICS],
+    blended: [f32; HARMONICS],
     phases: [f32; HARMONICS],
     gain: f32,
     n: u32,
@@ -365,16 +368,16 @@ fn smooth(t: f32) -> f32 {
 
 impl VowelTone {
     fn new(sound: VowelSound, gain: f32) -> Self {
-        let mut freqs = [0.0; HARMONICS];
-        let mut weights = [0.0; HARMONICS];
-        for i in 0..HARMONICS {
-            let step = (i + 1) as f32;
-            freqs[i] = sound.freq * step;
-            let tilt = (freqs[i] / 1000.0).powf(sound.brightness);
-            weights[i] = sound.vowel.loudness_at(freqs[i] / sound.tract) * tilt;
-        }
-        let total = weights.iter().sum::<f32>().max(0.001);
-        weights.iter_mut().for_each(|w| *w /= total);
+        let freqs: [f32; HARMONICS] = std::array::from_fn(|i| sound.freq * (i + 1) as f32);
+        let spectrum = |vowel: Vowel| {
+            let mut weights = freqs
+                .map(|f| vowel.loudness_at(f / sound.tract) * (f / 1000.0).powf(sound.brightness));
+            let total = weights.iter().sum::<f32>().max(0.001);
+            weights.iter_mut().for_each(|w| *w /= total);
+            weights
+        };
+        let weights = spectrum(sound.vowel);
+        let blended = spectrum(sound.blend);
         let length = if sound.whisper {
             WHISPER_LENGTH
         } else {
@@ -383,7 +386,8 @@ impl VowelTone {
         VowelTone {
             freqs,
             weights,
-            phases: [0.0; HARMONICS],
+            blended,
+            phases: std::array::from_fn(|i| (i as f32 * GOLDEN_RATIO).fract()),
             gain: gain * sound.gain * sound.vowel.presence(),
             n: 0,
             total: (length * sound.hold * RATE as f32) as u32,
@@ -414,11 +418,13 @@ impl Iterator for VowelTone {
         }
         self.wobble.step();
         let glide = (1.0 - VOWEL_GLIDE * progress) * (1.0 + self.wobble.pitch);
+        let morph = smooth(progress);
         let mut wave = 0.0;
         for i in 0..HARMONICS {
             let phase = (self.phases[i] + self.freqs[i] * glide / RATE as f32).fract();
             self.phases[i] = phase;
-            wave += self.weights[i] * (std::f32::consts::TAU * phase).sin();
+            let weight = self.weights[i] + (self.blended[i] - self.weights[i]) * morph;
+            wave += weight * (std::f32::consts::TAU * phase).sin();
         }
         let breath = self.wobble.breath();
         let body = wave * (1.0 - self.wobble.level) * (1.0 - BREATH);
@@ -589,6 +595,7 @@ mod vowel_tests {
         VowelSound {
             freq: 170.0,
             vowel,
+            blend: vowel,
             tract: 1.0,
             brightness: 0.0,
             gain: 1.0,
@@ -665,6 +672,17 @@ mod vowel_tests {
         let a: Vec<f32> = VowelTone::new(clean, 1.0).collect();
         let b: Vec<f32> = VowelTone::new(clean, 1.0).collect();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn a_blend_ends_on_the_second_vowel() {
+        let glide = VowelSound {
+            blend: Vowel::I,
+            ..sound(Vowel::O)
+        };
+        let tone = VowelTone::new(glide, 1.0);
+        assert_eq!(tone.weights, VowelTone::new(sound(Vowel::O), 1.0).weights);
+        assert_eq!(tone.blended, VowelTone::new(sound(Vowel::I), 1.0).weights);
     }
 
     #[test]

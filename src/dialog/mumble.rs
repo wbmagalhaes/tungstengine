@@ -1,5 +1,5 @@
-use crate::audio::{Vowel, VowelSound};
-use crate::ui::{Delivery, RichChar};
+use crate::audio::{VOWEL_LENGTH, Vowel, VowelSound};
+use crate::ui::{Delivery, RichChar, typing_time};
 
 use super::Voice;
 
@@ -10,9 +10,13 @@ const TUNE_FALL: f32 = 0.2;
 const EXCLAIM_LIFT: f32 = 0.25;
 const QUESTION_RISE: f32 = 0.4;
 const TRAIL_FADE: f32 = 0.85;
-const SHOUT_PITCH: f32 = 1.5;
-const SHOUT_BRIGHTNESS: f32 = 0.5;
+const SHOUT_PITCH: f32 = 1.3;
+const SHOUT_BRIGHTNESS: f32 = 0.2;
 const SHOUT_GAIN: f32 = 1.8;
+const OVERLAP: f32 = 1.2;
+const SHORTEST_HOLD: f32 = 0.7;
+const LONGEST_HOLD: f32 = 1.6;
+const BLEND_HOLD: f32 = 1.3;
 const SHOUT_HOLD: f32 = 1.5;
 const WHISPER_GAIN: f32 = 0.8;
 
@@ -21,6 +25,7 @@ pub fn vowel_between(
     from: usize,
     to: usize,
     voice: Voice,
+    per_second: f32,
 ) -> Option<VowelSound> {
     let to = to.min(chars.len());
     let (index, vowel) = (from.min(to)..to)
@@ -30,12 +35,13 @@ pub fn vowel_between(
     let sound = VowelSound {
         freq: BASE_PITCH * voice.pitch * (1.0 + voice.variation * swing(spoken.ch)),
         vowel,
+        blend: blend_of(chars, index).unwrap_or(vowel),
         tract: voice.tract,
         brightness: voice.brightness,
         gain: 1.0,
         whisper: false,
         roughness: voice.roughness,
-        hold: run_length(chars, index) as f32,
+        hold: overlapped_hold(chars, index, per_second),
     };
     let (pitch, level) = tune(chars, index);
     let sound = VowelSound {
@@ -132,9 +138,42 @@ fn run_length(chars: &[RichChar], index: usize) -> usize {
         .count()
 }
 
+fn vowel_run(chars: &[RichChar], index: usize) -> Vec<Vowel> {
+    chars[index..]
+        .iter()
+        .map_while(|c| vowel_of(c.ch))
+        .collect()
+}
+
+fn blend_of(chars: &[RichChar], index: usize) -> Option<Vowel> {
+    vowel_run(chars, index).last().copied()
+}
+
+fn overlapped_hold(chars: &[RichChar], index: usize, per_second: f32) -> f32 {
+    let held = hold_of(chars, index);
+    let next = (index + 1..chars.len()).find(|&i| sound_at(chars, i).is_some());
+    next.map_or(held, |next| {
+        let gap = typing_time(&chars[index + 1..=next], per_second);
+        let longest = held.max(LONGEST_HOLD);
+        (gap * OVERLAP / VOWEL_LENGTH).clamp(SHORTEST_HOLD, longest)
+    })
+}
+
+fn hold_of(chars: &[RichChar], index: usize) -> f32 {
+    let run = vowel_run(chars, index);
+    if run.windows(2).any(|pair| pair[0] != pair[1]) {
+        BLEND_HOLD
+    } else {
+        run_length(chars, index) as f32
+    }
+}
+
 fn sound_at(chars: &[RichChar], index: usize) -> Option<Vowel> {
     let letter = chars[index].ch;
-    if index > 0 && same_letter(chars[index - 1].ch, letter) {
+    let previous = index.checked_sub(1).map(|i| chars[i].ch);
+    if previous
+        .is_some_and(|p| same_letter(p, letter) || vowel_of(p).zip(vowel_of(letter)).is_some())
+    {
         return None;
     }
     if let Some(vowel) = vowel_of(letter) {
@@ -187,49 +226,69 @@ mod tests {
     use super::*;
     use crate::ui::parse_rich;
 
+    const SPEED: f32 = 28.0;
+
     #[test]
     fn only_vowels_make_a_sound() {
         let chars = parse_rich("b, t... r");
-        assert!(vowel_between(&chars, 0, 9, Voice::default()).is_none());
+        assert!(vowel_between(&chars, 0, 9, Voice::default(), SPEED).is_none());
     }
 
     #[test]
     fn a_word_without_vowels_hums_its_m_and_n() {
         let chars = parse_rich("Hmm...");
-        assert!(vowel_between(&chars, 0, 1, Voice::default()).is_none());
-        let hum = vowel_between(&chars, 1, 2, Voice::default()).unwrap();
+        assert!(vowel_between(&chars, 0, 1, Voice::default(), SPEED).is_none());
+        let hum = vowel_between(&chars, 1, 2, Voice::default(), SPEED).unwrap();
         assert_eq!(hum.vowel, Vowel::U);
         let word = parse_rich("mar");
-        assert!(vowel_between(&word, 0, 1, Voice::default()).is_none());
+        assert!(vowel_between(&word, 0, 1, Voice::default(), SPEED).is_none());
     }
 
     #[test]
     fn a_repeated_vowel_is_one_long_sound() {
         let chars = parse_rich("BUU!");
-        let first = vowel_between(&chars, 1, 2, Voice::default()).unwrap();
+        let first = vowel_between(&chars, 1, 2, Voice::default(), SPEED).unwrap();
         assert_eq!(first.hold, 2.0);
-        assert!(vowel_between(&chars, 2, 3, Voice::default()).is_none());
+        assert!(vowel_between(&chars, 2, 3, Voice::default(), SPEED).is_none());
     }
 
     #[test]
     fn a_word_without_vowels_hisses_as_one_long_breath() {
         let chars = parse_rich("Shh!");
-        let hiss = vowel_between(&chars, 0, 1, Voice::default()).unwrap();
+        let hiss = vowel_between(&chars, 0, 1, Voice::default(), SPEED).unwrap();
         assert!(hiss.whisper);
         assert_eq!(hiss.hold, 3.0);
-        assert!(vowel_between(&chars, 1, 3, Voice::default()).is_none());
+        assert!(vowel_between(&chars, 1, 3, Voice::default(), SPEED).is_none());
         let word = parse_rich("sol");
-        assert!(vowel_between(&word, 0, 1, Voice::default()).is_none());
+        assert!(vowel_between(&word, 0, 1, Voice::default(), SPEED).is_none());
+    }
+
+    #[test]
+    fn touching_vowels_glide_as_one_sound() {
+        let chars = parse_rich("oi");
+        let glide = vowel_between(&chars, 0, 1, Voice::default(), SPEED).unwrap();
+        assert_eq!((glide.vowel, glide.blend), (Vowel::O, Vowel::I));
+        assert_eq!(glide.hold, BLEND_HOLD);
+        assert!(vowel_between(&chars, 1, 2, Voice::default(), SPEED).is_none());
+    }
+
+    #[test]
+    fn each_sound_lasts_a_little_past_the_next_one() {
+        let chars = parse_rich("bababa");
+        let sound = vowel_between(&chars, 1, 2, Voice::default(), SPEED).unwrap();
+        let gap = 2.0 / SPEED;
+        assert!(sound.hold * VOWEL_LENGTH > gap);
+        assert!(sound.hold * VOWEL_LENGTH < gap * 1.5);
     }
 
     #[test]
     fn each_vowel_speaks_when_it_is_typed() {
         let chars = parse_rich("portão");
-        assert!(vowel_between(&chars, 0, 1, Voice::default()).is_none());
-        let first = vowel_between(&chars, 1, 2, Voice::default()).unwrap();
+        assert!(vowel_between(&chars, 0, 1, Voice::default(), SPEED).is_none());
+        let first = vowel_between(&chars, 1, 2, Voice::default(), SPEED).unwrap();
         assert_eq!(first.vowel, Vowel::O);
-        assert!(vowel_between(&chars, 2, 4, Voice::default()).is_none());
-        let second = vowel_between(&chars, 4, 5, Voice::default()).unwrap();
+        assert!(vowel_between(&chars, 2, 4, Voice::default(), SPEED).is_none());
+        let second = vowel_between(&chars, 4, 5, Voice::default(), SPEED).unwrap();
         assert_eq!(second.vowel, Vowel::Uh);
     }
 
@@ -244,22 +303,22 @@ mod tests {
             pitch: 2.0,
             ..Voice::default()
         };
-        let a = vowel_between(&chars, 0, 1, low).unwrap();
-        let b = vowel_between(&chars, 0, 1, low).unwrap();
-        let c = vowel_between(&chars, 0, 1, high).unwrap();
+        let a = vowel_between(&chars, 0, 1, low, SPEED).unwrap();
+        let b = vowel_between(&chars, 0, 1, low, SPEED).unwrap();
+        let c = vowel_between(&chars, 0, 1, high, SPEED).unwrap();
         assert_eq!(a, b);
         assert!((c.freq / a.freq - 2.0).abs() < 0.001);
     }
 
     #[test]
     fn shout_and_whisper_change_the_voice() {
-        let plain = vowel_between(&parse_rich("a"), 0, 1, Voice::default()).unwrap();
+        let plain = vowel_between(&parse_rich("a"), 0, 1, Voice::default(), SPEED).unwrap();
         let chars = parse_rich("[shout]a[/shout]");
-        let shout = vowel_between(&chars, 0, 1, Voice::default()).unwrap();
+        let shout = vowel_between(&chars, 0, 1, Voice::default(), SPEED).unwrap();
         assert!(shout.freq > plain.freq && shout.gain > plain.gain);
         assert!(shout.brightness > plain.brightness);
         let chars = parse_rich("[whisper]a[/whisper]");
-        let whisper = vowel_between(&chars, 0, 1, Voice::default()).unwrap();
+        let whisper = vowel_between(&chars, 0, 1, Voice::default(), SPEED).unwrap();
         assert!(whisper.whisper && whisper.gain < plain.gain);
     }
 

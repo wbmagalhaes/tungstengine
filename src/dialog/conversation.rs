@@ -167,7 +167,7 @@ pub fn conversation(world: &mut World, ui: &mut UI) -> bool {
     let sound = dialog
         .speaker
         .as_ref()
-        .and_then(|s| vowel_between(&chars, dialog.spoken, typed, s.voice));
+        .and_then(|s| vowel_between(&chars, dialog.spoken, typed, s.voice, TYPE_SPEED));
     dialog.spoken = dialog.spoken.max(typed);
     let full_text = dialog.text.clone();
     let name = name.unwrap_or_default();
