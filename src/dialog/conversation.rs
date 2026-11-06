@@ -146,6 +146,13 @@ fn spoken_name(world: &World) -> Option<String> {
 
 pub fn conversation(world: &mut World, ui: &mut UI) -> bool {
     let dt = world.dt();
+    let locale = world
+        .resource::<Localization>()
+        .map(|loc| loc.locale().to_string())
+        .unwrap_or_default();
+    if let Ok(dialog) = world.resource_mut::<Dialog>() {
+        dialog.set_locale(&locale);
+    }
     let portrait = portrait(world);
     let name = spoken_name(world);
     let Ok(dialog) = world.resource_mut::<Dialog>() else {

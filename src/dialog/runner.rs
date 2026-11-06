@@ -1,12 +1,58 @@
+use std::any::Any;
+use std::collections::HashMap;
 use std::path::Path;
 
 use yarnspinner::prelude::*;
-use yarnspinner::runtime::{MemoryVariableStorage, StringTableTextProvider};
+use yarnspinner::runtime::{MemoryVariableStorage, TextProvider};
 
 pub enum Presentation {
     Line { actor: Option<String>, text: String },
     Options(Vec<String>),
     Done,
+}
+
+#[derive(Clone, Debug, Default)]
+struct LocalizedText {
+    base: HashMap<LineId, String>,
+    translations: HashMap<Language, HashMap<LineId, String>>,
+    language: Option<Language>,
+}
+
+impl TextProvider for LocalizedText {
+    fn clone_shallow(&self) -> Box<dyn TextProvider> {
+        Box::new(self.clone())
+    }
+
+    fn accept_line_hints(&mut self, _line_ids: &[LineId]) {}
+
+    fn get_text(&self, id: &LineId) -> Option<String> {
+        let translated = self
+            .language
+            .as_ref()
+            .and_then(|language| self.translations.get(language))
+            .and_then(|table| table.get(id));
+        translated.or_else(|| self.base.get(id)).cloned()
+    }
+
+    fn set_language(&mut self, language: Option<Language>) {
+        self.language = language;
+    }
+
+    fn get_language(&self) -> Option<Language> {
+        self.language.clone()
+    }
+
+    fn are_lines_available(&self) -> bool {
+        !self.base.is_empty()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 pub struct YarnRunner {
@@ -47,13 +93,14 @@ impl YarnRunner {
             .map_err(|e| log::error!("yarn compile: {e}"))
             .ok()?;
         let program = compilation.program?;
-        let mut text = StringTableTextProvider::new();
-        text.extend_base_language(
-            compilation
+        let text = LocalizedText {
+            base: compilation
                 .string_table
                 .into_iter()
-                .map(|(id, info)| (id, info.text)),
-        );
+                .map(|(id, info)| (id, info.text))
+                .collect(),
+            ..LocalizedText::default()
+        };
         let mut dialogue = Dialogue::new(Box::new(MemoryVariableStorage::new()), Box::new(text));
         dialogue.add_program(program);
         Some(YarnRunner {
@@ -61,6 +108,23 @@ impl YarnRunner {
             options: Vec::new(),
             commands: Vec::new(),
         })
+    }
+
+    pub fn add_translation(&mut self, locale: &str, lines: HashMap<String, String>) {
+        let provider = self.dialogue.text_provider_mut().as_any_mut();
+        let Some(text) = provider.downcast_mut::<LocalizedText>() else {
+            return;
+        };
+        let table = text.translations.entry(Language::from(locale)).or_default();
+        table.extend(
+            lines
+                .into_iter()
+                .map(|(id, line)| (LineId(format!("line:{id}")), line)),
+        );
+    }
+
+    pub fn set_language(&mut self, locale: &str) {
+        self.dialogue.set_language_code(Language::from(locale));
     }
 
     pub fn set_flags(&mut self, flags: &[String]) {

@@ -21,6 +21,7 @@ pub struct Dialog {
     pub options: Vec<String>,
     pub elapsed: f32,
     pub(super) spoken: usize,
+    locale: String,
     pub auto: bool,
     pub focus: usize,
     pub mood: Option<String>,
@@ -31,6 +32,27 @@ impl Dialog {
     pub fn with_actors(mut self, actors: Actors) -> Self {
         self.actors = actors;
         self
+    }
+
+    pub fn with_translation(mut self, locale: &str, table: &str) -> Self {
+        match toml::from_str(table) {
+            Ok(lines) => {
+                if let Some(runner) = self.runner.as_mut() {
+                    runner.add_translation(locale, lines);
+                }
+            }
+            Err(e) => log::error!("dialog translation {locale}: {e}"),
+        }
+        self
+    }
+
+    pub fn set_locale(&mut self, locale: &str) {
+        if self.locale != locale {
+            self.locale = locale.to_string();
+            if let Some(runner) = self.runner.as_mut() {
+                runner.set_language(locale);
+            }
+        }
     }
 
     pub fn from_script(name: &str, source: &str) -> Self {
