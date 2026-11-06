@@ -49,7 +49,7 @@ impl Widget for TagList<'_> {
         let (mut x, mut y) = (r.x, r.y);
         let mut remove = None;
         for (n, tag) in self.tags.iter().enumerate() {
-            let w = ui.text_width(size, tag) + 34.0;
+            let w = ui.text_width(size, tag) + 40.0;
             if x + w > r.x + r.w && x > r.x {
                 x = r.x;
                 y += h + gap;
@@ -57,7 +57,7 @@ impl Widget for TagList<'_> {
             let chip = Rect::new(x, y, w, h).with_z(r.z);
             ui.surface(chip, t.chip_bg);
             ui.label(
-                chip.x + 8.0,
+                chip.x + 10.0,
                 chip.y + (h - size) / 2.0,
                 tag,
                 t.chip_fg,
