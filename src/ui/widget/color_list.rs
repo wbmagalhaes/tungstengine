@@ -1,9 +1,13 @@
+use crate::animation::Ease;
+use crate::ui::style::Transition;
 use std::hash::Hash;
 
 use crate::color::Color;
 use crate::ui::immediate::{UI, key_hash};
 use crate::ui::rect::Rect;
 use crate::ui::widget::{ColorPicker, Widget};
+
+const SWATCH_HOVER: Transition = Transition::new(0.12, Ease::OutBack).exit(0.2, Ease::OutCubic);
 
 pub struct ColorList<'a> {
     rect: Rect,
@@ -53,7 +57,7 @@ impl Widget for ColorList<'_> {
             let x = r.x + n as f32 * (cell + 8.0);
             let swatch = Rect::new(x, r.y, r.h, r.h).with_z(r.z);
             let open = self.editing.is_some_and(|(e, _)| e == n);
-            let resp = ui.interact_id(swatch, (self.id, n));
+            let resp = ui.interact_curved(swatch, (self.id, n), SWATCH_HOVER);
             ui.surface(
                 swatch,
                 if open {

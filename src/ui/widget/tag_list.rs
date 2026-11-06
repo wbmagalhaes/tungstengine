@@ -1,8 +1,12 @@
+use crate::animation::Ease;
+use crate::ui::style::Transition;
 use std::hash::Hash;
 
 use crate::ui::immediate::{TextEdit, UI, key_hash};
 use crate::ui::rect::Rect;
 use crate::ui::widget::Widget;
+
+const CLOSE_HOVER: Transition = Transition::new(0.08, Ease::OutBack).exit(0.16, Ease::OutCubic);
 
 pub struct TagList<'a> {
     rect: Rect,
@@ -62,7 +66,7 @@ impl Widget for TagList<'_> {
             );
             let close = Rect::new(chip.x + w - 22.0, chip.y + (h - 18.0) / 2.0, 18.0, 18.0)
                 .with_z(r.z + 0.001);
-            let resp = ui.interact_id(close, (self.id, n));
+            let resp = ui.interact_curved(close, (self.id, n), CLOSE_HOVER);
             ui.surface(close, t.chip_hover.lerp(t.accent, resp.hover()));
             ui.label(
                 close.x + 5.0,

@@ -1,8 +1,13 @@
+use crate::animation::Ease;
+use crate::ui::style::Transition;
 use std::hash::Hash;
 
 use crate::ui::immediate::{TextEdit, UI, key_hash};
 use crate::ui::rect::Rect;
 use crate::ui::widget::Widget;
+
+const ROW_HOVER: Transition = Transition::new(0.05, Ease::OutQuad).exit(0.14, Ease::OutCubic);
+const HEAD_HOVER: Transition = Transition::new(0.1, Ease::OutQuad).exit(0.18, Ease::InOutQuad);
 
 const MAX_ROWS: usize = 8;
 const DECOR_W: f32 = 56.0;
@@ -35,7 +40,7 @@ enum Mark {
 fn head(ui: &mut UI, r: Rect, id: u64, text: &str, state: &mut DropState) -> bool {
     let t = ui.theme;
     let size = t.font_size * 0.9;
-    let resp = ui.interact_id(r, (id, "head"));
+    let resp = ui.interact_curved(r, (id, "head"), HEAD_HOVER);
     ui.surface(r, t.accent.lerp(t.button_fg, resp.hover() * 0.3));
     ui.surface(r.with_padding(1.0).inner().with_z(r.z + 0.001), t.field_bg);
     ui.label(
@@ -110,7 +115,7 @@ fn popup(
         if row.y + row.h < view.y || row.y > view.y + view.h {
             continue;
         }
-        let resp = ui.interact_id(row.intersect(view).with_z(z + 0.001), (id, *opt));
+        let resp = ui.interact_curved(row.intersect(view).with_z(z + 0.001), (id, *opt), ROW_HOVER);
         let m = mark(opt);
         let bg = if matches!(m, Mark::Current) {
             t.accent

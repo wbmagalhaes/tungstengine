@@ -4,9 +4,11 @@ use crate::ui::rect::Rect;
 use crate::ui::style::Transition;
 use crate::ui::widget::{Response, Widget};
 
+const BOX_HOVER: Transition = Transition::new(0.1, Ease::OutCubic).exit(0.2, Ease::InOutQuad);
+const MARK_TRANSITION: Transition = Transition::new(0.1, Ease::OutCubic).exit(0.2, Ease::InOutQuad);
+
 const BORDER: f32 = 2.0;
 const MARK_INSET: f32 = 5.0;
-const MARK_TRANSITION: Transition = Transition::new(0.1, Ease::OutCubic).exit(0.2, Ease::InOutQuad);
 const MAX_RADIUS_SHARE: f32 = 0.25;
 
 pub struct Checkbox<'a> {
@@ -49,7 +51,7 @@ impl Widget for Checkbox<'_> {
         let (x, y, z) = (self.x, self.y, self.z);
         let w = ui.text_width(size, self.label) + 34.0;
         let r = Rect::new(x, y, w, 24.0).with_z(z);
-        let mut resp = ui.interact_id(r, ("checkbox", self.label));
+        let mut resp = ui.interact_curved(r, ("checkbox", self.label), BOX_HOVER);
         if resp.clicked {
             *self.value = !*self.value;
             resp.changed = true;

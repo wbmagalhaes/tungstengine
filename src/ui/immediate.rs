@@ -1831,14 +1831,19 @@ impl UI {
         self.interact_hashed(rect, id)
     }
 
+    pub fn interact_curved(&mut self, rect: Rect, id: impl Hash, curve: Transition) -> Response {
+        let id = self.scoped(key_hash(id));
+        self.interact_with(rect, id, curve)
+    }
+
     pub fn interact_hashed(&mut self, rect: Rect, id: u64) -> Response {
+        self.interact_with(rect, id, HOVER_TRANSITION)
+    }
+
+    fn interact_with(&mut self, rect: Rect, id: u64, curve: Transition) -> Response {
         let hover = self.pointer_over(rect);
         let (entered, exited) = self.hover_edges(id, hover);
-        let t = self.transition(
-            (id, "hover"),
-            if hover { 1.0 } else { 0.0 },
-            HOVER_TRANSITION,
-        );
+        let t = self.transition((id, "hover"), if hover { 1.0 } else { 0.0 }, curve);
         Response {
             hovered: hover,
             clicked: hover && self.clicked,
