@@ -112,6 +112,7 @@ pub struct VowelSound {
     pub gain: f32,
     pub whisper: bool,
     pub roughness: f32,
+    pub hold: f32,
 }
 
 const VOWEL_AH: &[(f32, f32)] = &[
@@ -201,6 +202,15 @@ const VOWEL_UH: &[(f32, f32)] = &[
 ];
 
 impl Vowel {
+    fn presence(self) -> f32 {
+        match self {
+            Vowel::U => 1.8,
+            Vowel::O => 1.5,
+            Vowel::I => 1.2,
+            _ => 1.0,
+        }
+    }
+
     fn envelope(self) -> &'static [(f32, f32)] {
         match self {
             Vowel::A => VOWEL_AH,
@@ -229,7 +239,9 @@ impl Vowel {
 const VOWEL_LENGTH: f32 = 0.085;
 const VOWEL_SWELL: f32 = 0.2;
 const VOWEL_RELEASE: f32 = 0.25;
-const WHISPER_SPACING: f32 = 115.0;
+const WHISPER_LENGTH: f32 = 0.12;
+const WHISPER_DAMPING: f32 = 0.25;
+const WHISPER_LEVEL: f32 = 0.2;
 const JITTER: f32 = 0.015;
 const SHIMMER: f32 = 0.14;
 const BREATH: f32 = 0.04;
@@ -248,6 +260,47 @@ struct VowelTone {
     n: u32,
     total: u32,
     wobble: Wobble,
+    breath: Vec<Resonator>,
+}
+
+struct Resonator {
+    tuning: f32,
+    gain: f32,
+    low: f32,
+    band: f32,
+}
+
+impl Resonator {
+    fn new(freq: f32, gain: f32) -> Self {
+        let angle = std::f32::consts::PI * freq / RATE as f32;
+        Resonator {
+            tuning: 2.0 * angle.sin(),
+            gain,
+            low: 0.0,
+            band: 0.0,
+        }
+    }
+
+    fn filter(&mut self, input: f32) -> f32 {
+        self.low += self.tuning * self.band;
+        let high = input - self.low - WHISPER_DAMPING * self.band;
+        self.band += self.tuning * high;
+        self.band * self.gain
+    }
+}
+
+fn resonators(sound: VowelSound) -> Vec<Resonator> {
+    sound
+        .vowel
+        .envelope()
+        .windows(3)
+        .filter(|w| w[1].1 >= w[0].1 && w[1].1 >= w[2].1)
+        .map(|w| {
+            let freq = w[1].0 * sound.tract;
+            let tilt = (freq / 1000.0).powf(sound.brightness);
+            Resonator::new(freq, w[1].1 * tilt)
+        })
+        .collect()
 }
 
 struct Wobble {
@@ -305,11 +358,6 @@ impl Wobble {
     }
 }
 
-fn scatter(index: usize) -> f32 {
-    let spread = (index as u32 + 1).wrapping_mul(2_654_435_761);
-    (spread >> 16 & 0xffff) as f32 / 65_535.0
-}
-
 fn smooth(t: f32) -> f32 {
     let t = t.clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
@@ -319,28 +367,32 @@ impl VowelTone {
     fn new(sound: VowelSound, gain: f32) -> Self {
         let mut freqs = [0.0; HARMONICS];
         let mut weights = [0.0; HARMONICS];
-        let mut phases = [0.0; HARMONICS];
         for i in 0..HARMONICS {
             let step = (i + 1) as f32;
-            freqs[i] = if sound.whisper {
-                phases[i] = scatter(i);
-                WHISPER_SPACING * (step + scatter(i + HARMONICS) - 0.5)
-            } else {
-                sound.freq * step
-            };
+            freqs[i] = sound.freq * step;
             let tilt = (freqs[i] / 1000.0).powf(sound.brightness);
             weights[i] = sound.vowel.loudness_at(freqs[i] / sound.tract) * tilt;
         }
         let total = weights.iter().sum::<f32>().max(0.001);
         weights.iter_mut().for_each(|w| *w /= total);
+        let length = if sound.whisper {
+            WHISPER_LENGTH
+        } else {
+            VOWEL_LENGTH
+        };
         VowelTone {
             freqs,
             weights,
-            phases,
-            gain: gain * sound.gain,
+            phases: [0.0; HARMONICS],
+            gain: gain * sound.gain * sound.vowel.presence(),
             n: 0,
-            total: (VOWEL_LENGTH * RATE as f32) as u32,
+            total: (length * sound.hold * RATE as f32) as u32,
             wobble: Wobble::new(sound.freq, sound.roughness.clamp(0.0, 1.0)),
+            breath: if sound.whisper {
+                resonators(sound)
+            } else {
+                Vec::new()
+            },
         }
     }
 }
@@ -354,6 +406,12 @@ impl Iterator for VowelTone {
         }
         let progress = self.n as f32 / self.total as f32;
         self.n += 1;
+        let env = smooth(progress / VOWEL_SWELL) * smooth((1.0 - progress) / VOWEL_RELEASE);
+        if !self.breath.is_empty() {
+            let noise = self.wobble.signed();
+            let air: f32 = self.breath.iter_mut().map(|r| r.filter(noise)).sum();
+            return Some((air * WHISPER_LEVEL).clamp(-1.0, 1.0) * env * self.gain);
+        }
         self.wobble.step();
         let glide = (1.0 - VOWEL_GLIDE * progress) * (1.0 + self.wobble.pitch);
         let mut wave = 0.0;
@@ -362,7 +420,6 @@ impl Iterator for VowelTone {
             self.phases[i] = phase;
             wave += self.weights[i] * (std::f32::consts::TAU * phase).sin();
         }
-        let env = smooth(progress / VOWEL_SWELL) * smooth((1.0 - progress) / VOWEL_RELEASE);
         let breath = self.wobble.breath();
         let body = wave * (1.0 - self.wobble.level) * (1.0 - BREATH);
         Some((body + breath) * env * self.gain)
@@ -537,6 +594,7 @@ mod vowel_tests {
             gain: 1.0,
             whisper: false,
             roughness: 1.0,
+            hold: 1.0,
         }
     }
 
@@ -610,13 +668,28 @@ mod vowel_tests {
     }
 
     #[test]
-    fn a_whisper_has_no_harmonic_series() {
+    fn hold_stretches_the_vowel() {
+        let long = VowelSound {
+            hold: 2.0,
+            ..sound(Vowel::U)
+        };
+        let short = VowelTone::new(sound(Vowel::U), 1.0).count();
+        assert!(VowelTone::new(long, 1.0).count() > short * 3 / 2);
+    }
+
+    #[test]
+    fn a_whisper_is_air_at_a_lower_level_than_the_voice() {
         let whisper = VowelSound {
             whisper: true,
             ..sound(Vowel::A)
         };
-        let f = VowelTone::new(whisper, 1.0).freqs;
-        assert!((f[1] / f[0] - 2.0).abs() > 0.01);
+        let rms = |t: VowelTone| {
+            let samples: Vec<f32> = t.collect();
+            (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+        };
+        let air = rms(VowelTone::new(whisper, 1.0));
+        let voice = rms(VowelTone::new(sound(Vowel::A), 1.0));
+        assert!(air > voice * 0.2 && air < voice);
     }
 
     #[test]

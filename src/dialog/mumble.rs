@@ -13,6 +13,7 @@ const TRAIL_FADE: f32 = 0.85;
 const SHOUT_PITCH: f32 = 1.5;
 const SHOUT_BRIGHTNESS: f32 = 0.5;
 const SHOUT_GAIN: f32 = 1.8;
+const SHOUT_HOLD: f32 = 1.5;
 const WHISPER_GAIN: f32 = 0.8;
 
 pub fn vowel_between(
@@ -24,7 +25,7 @@ pub fn vowel_between(
     let to = to.min(chars.len());
     let (index, vowel) = (from.min(to)..to)
         .rev()
-        .find_map(|i| Some((i, vowel_of(chars[i].ch)?)))?;
+        .find_map(|i| Some((i, sound_at(chars, i)?)))?;
     let spoken = &chars[index];
     let sound = VowelSound {
         freq: BASE_PITCH * voice.pitch * (1.0 + voice.variation * swing(spoken.ch)),
@@ -34,6 +35,7 @@ pub fn vowel_between(
         gain: 1.0,
         whisper: false,
         roughness: voice.roughness,
+        hold: run_length(chars, index) as f32,
     };
     let (pitch, level) = tune(chars, index);
     let sound = VowelSound {
@@ -41,12 +43,18 @@ pub fn vowel_between(
         gain: level,
         ..sound
     };
-    Some(match spoken.delivery() {
+    let delivery = if hisses(chars, index) {
+        Delivery::Whisper
+    } else {
+        spoken.delivery()
+    };
+    Some(match delivery {
         Delivery::Normal => sound,
         Delivery::Shout => VowelSound {
             freq: sound.freq * SHOUT_PITCH,
             brightness: sound.brightness + SHOUT_BRIGHTNESS,
             gain: sound.gain * SHOUT_GAIN,
+            hold: sound.hold * SHOUT_HOLD,
             ..sound
         },
         Delivery::Whisper => VowelSound {
@@ -112,6 +120,56 @@ fn swing(letter: char) -> f32 {
     (spread >> 16 & 0xff) as f32 / 127.5 - 1.0
 }
 
+fn same_letter(a: char, b: char) -> bool {
+    a.to_lowercase().eq(b.to_lowercase())
+}
+
+fn run_length(chars: &[RichChar], index: usize) -> usize {
+    chars[index..]
+        .iter()
+        .enumerate()
+        .take_while(|(i, c)| same_letter(c.ch, chars[index].ch) || hisses(chars, index + i))
+        .count()
+}
+
+fn sound_at(chars: &[RichChar], index: usize) -> Option<Vowel> {
+    let letter = chars[index].ch;
+    if index > 0 && same_letter(chars[index - 1].ch, letter) {
+        return None;
+    }
+    if let Some(vowel) = vowel_of(letter) {
+        return Some(vowel);
+    }
+    if hisses(chars, index) {
+        let continues = index > 0 && hisses(chars, index - 1);
+        return (!continues).then_some(Vowel::I);
+    }
+    (is_hum(letter) && word_has_no_vowel(chars, index)).then_some(Vowel::U)
+}
+
+fn word_around(chars: &[RichChar], index: usize) -> impl Iterator<Item = char> {
+    let letter = |c: &&RichChar| c.ch.is_alphabetic();
+    let before = chars[..index].iter().rev().take_while(letter);
+    let after = chars[index..].iter().take_while(letter);
+    before.chain(after).map(|c| c.ch)
+}
+
+fn word_has_no_vowel(chars: &[RichChar], index: usize) -> bool {
+    !word_around(chars, index).any(|c| vowel_of(c).is_some())
+}
+
+fn is_hum(letter: char) -> bool {
+    matches!(letter.to_ascii_lowercase(), 'm' | 'n')
+}
+
+fn hisses(chars: &[RichChar], index: usize) -> bool {
+    matches!(
+        chars[index].ch.to_ascii_lowercase(),
+        's' | 'h' | 'x' | 'z' | 'f'
+    ) && word_has_no_vowel(chars, index)
+        && !word_around(chars, index).any(is_hum)
+}
+
 fn vowel_of(letter: char) -> Option<Vowel> {
     match letter.to_lowercase().next()? {
         'a' | 'á' | 'à' => Some(Vowel::A),
@@ -133,6 +191,35 @@ mod tests {
     fn only_vowels_make_a_sound() {
         let chars = parse_rich("b, t... r");
         assert!(vowel_between(&chars, 0, 9, Voice::default()).is_none());
+    }
+
+    #[test]
+    fn a_word_without_vowels_hums_its_m_and_n() {
+        let chars = parse_rich("Hmm...");
+        assert!(vowel_between(&chars, 0, 1, Voice::default()).is_none());
+        let hum = vowel_between(&chars, 1, 2, Voice::default()).unwrap();
+        assert_eq!(hum.vowel, Vowel::U);
+        let word = parse_rich("mar");
+        assert!(vowel_between(&word, 0, 1, Voice::default()).is_none());
+    }
+
+    #[test]
+    fn a_repeated_vowel_is_one_long_sound() {
+        let chars = parse_rich("BUU!");
+        let first = vowel_between(&chars, 1, 2, Voice::default()).unwrap();
+        assert_eq!(first.hold, 2.0);
+        assert!(vowel_between(&chars, 2, 3, Voice::default()).is_none());
+    }
+
+    #[test]
+    fn a_word_without_vowels_hisses_as_one_long_breath() {
+        let chars = parse_rich("Shh!");
+        let hiss = vowel_between(&chars, 0, 1, Voice::default()).unwrap();
+        assert!(hiss.whisper);
+        assert_eq!(hiss.hold, 3.0);
+        assert!(vowel_between(&chars, 1, 3, Voice::default()).is_none());
+        let word = parse_rich("sol");
+        assert!(vowel_between(&word, 0, 1, Voice::default()).is_none());
     }
 
     #[test]
