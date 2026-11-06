@@ -23,6 +23,8 @@ struct Item {
     rise: f32,
 }
 
+const MAX_STACK: usize = 8;
+
 #[derive(Resource, Default)]
 pub struct Toasts {
     items: Vec<Item>,
@@ -43,6 +45,9 @@ impl Toasts {
             life: seconds,
             rise: 0.0,
         });
+        if self.items.len() > MAX_STACK {
+            self.items.remove(0);
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -116,5 +121,15 @@ mod tests {
             frame(&mut ui, &mut toasts, 0.03);
         }
         assert!(toasts.items[0].rise > toasts.items[1].rise + HEIGHT);
+    }
+
+    #[test]
+    fn stack_drops_the_oldest_past_the_limit() {
+        let mut toasts = Toasts::default();
+        for i in 0..8 {
+            toasts.push(format!("{i}"));
+        }
+        assert_eq!(toasts.len(), MAX_STACK);
+        assert_eq!(toasts.items[0].text, "3");
     }
 }
