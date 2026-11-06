@@ -1,12 +1,30 @@
 use crate::animation::Ease;
+use crate::ui::animation::Anim;
+use crate::ui::style::Styled;
 use crate::ui::style::Transition;
+use crate::ui::widget::Group;
+use crate::ui::widget::TextInput;
+use crate::ui::widget::checkbox::check_box;
 use std::hash::Hash;
 
-use crate::ui::immediate::{TextEdit, UI, key_hash};
+use crate::ui::immediate::{FIELD_PAD, LineIcon, TextEdit, UI, key_hash};
 use crate::ui::rect::Rect;
 use crate::ui::widget::Widget;
 
 const ROW_HOVER: Transition = Transition::new(0.05, Ease::OutQuad).exit(0.14, Ease::OutCubic);
+const DROP_GAP: f32 = 4.0;
+const HINT_ALPHA: f32 = 0.45;
+const CLEAR_SIZE: f32 = 18.0;
+const CLEAR_RIGHT: f32 = 26.0;
+const CLEAR_ICON: f32 = 7.0;
+const CLEAR_TINT: f32 = 0.3;
+const POPOVER_ENTER: f32 = 0.16;
+const POPOVER_EXIT: f32 = 0.11;
+const POPOVER_SHIFT: f32 = -8.0;
+const ARROW_SIZE: f32 = 9.0;
+const SCROLL_GUTTER: f32 = 10.0;
+const ROW_HOVER_TINT: f32 = 0.08;
+const CURRENT_BAR_INSET: f32 = 9.0;
 const HEAD_HOVER: Transition = Transition::new(0.1, Ease::OutQuad).exit(0.18, Ease::InOutQuad);
 
 const MAX_ROWS: usize = 8;
@@ -27,6 +45,19 @@ fn decor_rect(row: Rect, right: f32) -> Rect {
 pub struct DropState {
     pub open: bool,
     pub search: String,
+    pub search_placeholder: Option<&'static str>,
+}
+
+fn popover_anim() -> Anim {
+    let leave = Anim::new(POPOVER_EXIT)
+        .ease(Ease::InQuad)
+        .fade()
+        .rise(POPOVER_SHIFT);
+    Anim::new(POPOVER_ENTER)
+        .ease(Ease::OutCubic)
+        .fade()
+        .rise(POPOVER_SHIFT)
+        .exit(leave)
 }
 
 enum Mark {
@@ -37,29 +68,52 @@ enum Mark {
     Disabled,
 }
 
-fn head(ui: &mut UI, r: Rect, id: u64, text: &str, state: &mut DropState) -> bool {
+fn clear_button(ui: &mut UI, r: Rect, id: u64) -> bool {
     let t = ui.theme;
-    let size = t.font_size * 0.9;
+    let size = CLEAR_SIZE;
+    let x = r.x + r.w - CLEAR_RIGHT - size;
+    let zone = Rect::new(x, r.y + (r.h - size) / 2.0, size, size).with_z(r.z + 0.01);
+    let resp = ui.interact_curved(zone, (id, "clear"), HEAD_HOVER);
+    if resp.hover() > 0.0 {
+        let tint = t.accent.with_alpha(CLEAR_TINT * resp.hover());
+        ui.fill_round(zone, tint, size / 2.0);
+    }
+    let center = (x + size / 2.0, zone.y + size / 2.0);
+    ui.icon_line(LineIcon::Cross, center, CLEAR_ICON, t.label, zone.z + 0.001);
+    resp.clicked
+}
+
+fn head(
+    ui: &mut UI,
+    r: Rect,
+    id: u64,
+    (text, hint): (&str, Option<&str>),
+    state: &mut DropState,
+) -> bool {
+    let t = ui.theme;
+    let size = t.font_size;
     let resp = ui.interact_curved(r, (id, "head"), HEAD_HOVER);
-    ui.surface(r, t.accent.lerp(t.button_fg, resp.hover() * 0.3));
-    ui.surface(r.with_padding(1.0).inner().with_z(r.z + 0.001), t.field_bg);
+    ui.field_box(r, state.open || resp.hovered);
+    let empty = text.is_empty();
+    let (shown, ink) = match hint.filter(|_| empty) {
+        Some(hint) => (hint, t.label.with_alpha(HINT_ALPHA)),
+        None => (text, t.label),
+    };
     ui.label(
-        r.x + 8.0,
+        r.x + FIELD_PAD,
         r.y + (r.h - size) / 2.0,
-        text,
-        t.label,
+        shown,
+        ink,
         size,
         r.z + 0.002,
     );
-    let arrow = if state.open { "▴" } else { "▾" };
-    ui.label(
-        r.x + r.w - 18.0,
-        r.y + (r.h - size) / 2.0,
-        arrow,
-        t.label,
-        size,
-        r.z + 0.002,
-    );
+    let arrow = if state.open {
+        LineIcon::ChevronUp
+    } else {
+        LineIcon::ChevronDown
+    };
+    let center = (r.x + r.w - 14.0, r.y + r.h / 2.0);
+    ui.icon_line(arrow, center, ARROW_SIZE, t.label, r.z + 0.002);
     if resp.clicked {
         state.open = !state.open;
         state.search.clear();
@@ -72,26 +126,20 @@ fn popup(
     ui: &mut UI,
     (r, id): (Rect, u64),
     options: &[&str],
-    (state, edit): (&mut DropState, &TextEdit),
+    (state, _): (&mut DropState, &TextEdit),
     decorate: Option<Decorate>,
     mark: impl Fn(&str) -> Mark,
 ) -> Option<String> {
     let t = ui.theme;
-    let size = t.font_size * 0.9;
+    let size = t.font_size;
     let z = r.z + 1.0;
-    let search = Rect::new(r.x, r.y + r.h, r.w, r.h).with_z(z);
-    ui.surface(search, t.field_bg);
-    ui.text_field((id, "search"), search, &mut state.search, edit);
-    if state.search.is_empty() {
-        ui.label(
-            search.x + 8.0,
-            search.y + (r.h - size) / 2.0,
-            "search…",
-            t.label.with_alpha(0.4),
-            size,
-            z + 0.01,
-        );
-    }
+    let search = Rect::new(r.x, r.y + r.h + DROP_GAP, r.w, r.h).with_z(z);
+    let hint = state.search_placeholder.unwrap_or("Search…");
+    let top = t.border_radius;
+    let input = TextInput::new(search, (id, "search"), &mut state.search)
+        .placeholder(hint)
+        .border_radius_corners(top, top, 0.0, 0.0);
+    ui.add(input);
     let needle = state.search.to_lowercase();
     let shown: Vec<&str> = options
         .iter()
@@ -106,31 +154,37 @@ fn popup(
     )
     .with_z(z);
     let offset = ui.scroll_area((id, "scroll"), view, r.h * shown.len() as f32, t.accent);
-    ui.surface(view, t.field_bg);
+    let bottom = [0.0, 0.0, t.border_radius, t.border_radius];
+    ui.fill_corners(view, t.field_bg, bottom, 1.0, t.panel_border);
     let mut picked = None;
-    ui.push_clip(view);
+    ui.push_clip_corners(view, bottom);
+    let scrolls = r.h * shown.len() as f32 > view.h;
+    let row_w = r.w - if scrolls { SCROLL_GUTTER } else { 0.0 };
     for (n, opt) in shown.iter().enumerate() {
-        let row =
-            Rect::new(r.x, view.y + r.h * n as f32 - offset, r.w - 10.0, r.h).with_z(z + 0.001);
+        let y = view.y + r.h * n as f32 - offset;
+        let row = Rect::new(r.x, y, row_w, r.h).with_z(z + 0.001);
         if row.y + row.h < view.y || row.y > view.y + view.h {
             continue;
         }
         let resp = ui.interact_curved(row.intersect(view).with_z(z + 0.001), (id, *opt), ROW_HOVER);
         let m = mark(opt);
-        let bg = if matches!(m, Mark::Current) {
-            t.accent
-        } else {
-            t.field_bg
-        };
-        ui.surface(row, bg.lerp(t.button_fg, resp.hover() * 0.3));
-        let mut tx = row.x + 8.0;
+        if resp.hover() > 0.0 {
+            let soft = t.button_fg.with_alpha(ROW_HOVER_TINT * resp.hover());
+            ui.fill(row, soft);
+        }
+        let current = matches!(m, Mark::Current);
+        if current {
+            let height = row.h - CURRENT_BAR_INSET * 2.0;
+            let bar = Rect::new(row.x + 3.0, row.y + CURRENT_BAR_INSET, 3.0, height);
+            ui.fill_round(bar.with_z(row.z + 0.001), t.accent, 1.5);
+        }
+        let mut tx = row.x + if current { FIELD_PAD + 4.0 } else { FIELD_PAD };
         if matches!(m, Mark::Checked(_) | Mark::Unchecked | Mark::Disabled) {
             let bx =
                 Rect::new(row.x + 6.0, row.y + (row.h - 14.0) / 2.0, 14.0, 14.0).with_z(z + 0.002);
-            ui.surface(bx, t.accent);
-            ui.surface(bx.with_padding(2.0).inner().with_z(z + 0.003), t.field_bg);
+            let checked = matches!(m, Mark::Checked(_));
+            check_box(ui, bx, (id, "check", *opt), checked, t.accent);
             if let Mark::Checked(p) = m {
-                ui.surface(bx.with_padding(4.0).inner().with_z(z + 0.004), t.mark);
                 ui.label(
                     row.x + row.w - 22.0,
                     row.y + (row.h - size) / 2.0,
@@ -142,10 +196,11 @@ fn popup(
             }
             tx = row.x + 28.0;
         }
-        let fg = if matches!(m, Mark::Disabled) {
-            t.label.with_alpha(0.4)
-        } else {
-            t.label
+        let fg = match m {
+            Mark::Disabled => t.label.with_alpha(0.4),
+            Mark::Current => t.accent,
+            Mark::Checked(_) => t.button_fg,
+            _ => t.label,
         };
         ui.label(tx, row.y + (row.h - size) / 2.0, opt, fg, size, z + 0.003);
         if let Some(f) = decorate {
@@ -156,7 +211,7 @@ fn popup(
         }
     }
     ui.pop_clip();
-    ui.block_pointer(Rect::new(r.x, r.y, r.w, view.y + view.h - r.y).with_z(z));
+    ui.block_pointer(Rect::new(r.x, search.y, r.w, view.y + view.h - search.y).with_z(z));
     let area = Rect::new(r.x, r.y, r.w, view.y + view.h - r.y);
     if ui.clicked_outside(area) {
         state.open = false;
@@ -171,6 +226,8 @@ pub struct Dropdown<'a> {
     state: &'a mut DropState,
     edit: &'a TextEdit,
     decorate: Option<Decorate<'a>>,
+    placeholder: Option<&'a str>,
+    clearable: bool,
     id: u64,
 }
 
@@ -190,8 +247,20 @@ impl<'a> Dropdown<'a> {
             state,
             edit,
             decorate: None,
+            placeholder: None,
+            clearable: false,
             id: key_hash(id),
         }
+    }
+
+    pub fn clearable(mut self) -> Self {
+        self.clearable = true;
+        self
+    }
+
+    pub fn placeholder(mut self, text: &'a str) -> Self {
+        self.placeholder = Some(text);
+        self
     }
 
     pub fn decorate(mut self, f: Decorate<'a>) -> Self {
@@ -212,23 +281,42 @@ impl Widget for Dropdown<'_> {
                 &text,
             );
         }
-        if head(ui, self.rect, self.id, &text, self.state) || !self.state.open {
+        if self.clearable && !self.selected.is_empty() && clear_button(ui, self.rect, self.id) {
+            self.selected.clear();
+            self.state.open = false;
+            return true;
+        }
+        if head(
+            ui,
+            self.rect,
+            self.id,
+            (&text, self.placeholder),
+            self.state,
+        ) || !self.state.open
+        {
             return false;
         }
         let current = self.selected.clone();
-        let picked = popup(
-            ui,
-            (self.rect, self.id),
-            self.options,
-            (self.state, self.edit),
-            self.decorate,
-            |o| {
-                if o == current {
-                    Mark::Current
-                } else {
-                    Mark::None
-                }
-            },
+        let key = format!("dropdown-{}", self.id);
+        let picked = ui.add(
+            Group::new(|ui: &mut UI| {
+                popup(
+                    ui,
+                    (self.rect, self.id),
+                    self.options,
+                    (self.state, self.edit),
+                    self.decorate,
+                    |o| {
+                        if o == current {
+                            Mark::Current
+                        } else {
+                            Mark::None
+                        }
+                    },
+                )
+            })
+            .anim(popover_anim())
+            .key(&key),
         );
         match picked {
             Some(p) => {
@@ -249,6 +337,8 @@ pub struct MultiSelect<'a> {
     state: &'a mut DropState,
     edit: &'a TextEdit,
     max: usize,
+    placeholder: Option<&'a str>,
+    clearable: bool,
     id: u64,
 }
 
@@ -268,8 +358,20 @@ impl<'a> MultiSelect<'a> {
             state,
             edit,
             max: usize::MAX,
+            placeholder: None,
+            clearable: false,
             id: key_hash(id),
         }
+    }
+
+    pub fn clearable(mut self) -> Self {
+        self.clearable = true;
+        self
+    }
+
+    pub fn placeholder(mut self, text: &'a str) -> Self {
+        self.placeholder = Some(text);
+        self
     }
 
     pub fn max(mut self, max: usize) -> Self {
@@ -283,22 +385,41 @@ impl Widget for MultiSelect<'_> {
 
     fn render(self, ui: &mut UI) -> bool {
         let summary = self.selected.join(", ");
-        if head(ui, self.rect, self.id, &summary, self.state) || !self.state.open {
+        if self.clearable && !self.selected.is_empty() && clear_button(ui, self.rect, self.id) {
+            self.selected.clear();
+            self.state.open = false;
+            return true;
+        }
+        if head(
+            ui,
+            self.rect,
+            self.id,
+            (&summary, self.placeholder),
+            self.state,
+        ) || !self.state.open
+        {
             return false;
         }
         let chosen = self.selected.clone();
         let full = chosen.len() >= self.max;
-        let picked = popup(
-            ui,
-            (self.rect, self.id),
-            self.options,
-            (self.state, self.edit),
-            None,
-            |o| match chosen.iter().position(|s| s == o) {
-                Some(p) => Mark::Checked(p),
-                None if full => Mark::Disabled,
-                None => Mark::Unchecked,
-            },
+        let key = format!("dropdown-{}", self.id);
+        let picked = ui.add(
+            Group::new(|ui: &mut UI| {
+                popup(
+                    ui,
+                    (self.rect, self.id),
+                    self.options,
+                    (self.state, self.edit),
+                    None,
+                    |o| match chosen.iter().position(|s| s == o) {
+                        Some(p) => Mark::Checked(p),
+                        None if full => Mark::Disabled,
+                        None => Mark::Unchecked,
+                    },
+                )
+            })
+            .anim(popover_anim())
+            .key(&key),
         );
         let Some(p) = picked else {
             return false;

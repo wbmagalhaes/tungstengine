@@ -2,17 +2,18 @@ use crate::animation::Ease;
 use crate::ui::style::Transition;
 use std::hash::Hash;
 
-use crate::ui::immediate::{TextEdit, UI, key_hash};
+use crate::ui::immediate::{LineIcon, TextEdit, UI, key_hash};
 use crate::ui::rect::Rect;
+use crate::ui::widget::TextInput;
 use crate::ui::widget::Widget;
 
+const CROSS_SIZE: f32 = 7.0;
 const CLOSE_HOVER: Transition = Transition::new(0.08, Ease::OutBack).exit(0.16, Ease::OutCubic);
 
 pub struct TagList<'a> {
     rect: Rect,
     tags: &'a mut Vec<String>,
     input: &'a mut String,
-    edit: &'a TextEdit,
     id: u64,
 }
 
@@ -26,14 +27,13 @@ impl<'a> TagList<'a> {
         rect: Rect,
         tags: &'a mut Vec<String>,
         input: &'a mut String,
-        edit: &'a TextEdit,
+        _edit: &'a TextEdit,
         id: impl Hash,
     ) -> Self {
         TagList {
             rect,
             tags,
             input,
-            edit,
             id: key_hash(id),
         }
     }
@@ -45,7 +45,7 @@ impl Widget for TagList<'_> {
     fn render(self, ui: &mut UI) -> TagListOut {
         let t = ui.theme;
         let r = self.rect;
-        let (h, gap, size) = (r.h, 6.0, t.font_size * 0.85);
+        let (h, gap, size) = (r.h, 6.0, t.font_size);
         let (mut x, mut y) = (r.x, r.y);
         let mut remove = None;
         for (n, tag) in self.tags.iter().enumerate() {
@@ -67,13 +67,17 @@ impl Widget for TagList<'_> {
             let close = Rect::new(chip.x + w - 22.0, chip.y + (h - 18.0) / 2.0, 18.0, 18.0)
                 .with_z(r.z + 0.001);
             let resp = ui.interact_curved(close, (self.id, n), CLOSE_HOVER);
-            ui.surface(close, t.chip_hover.lerp(t.accent, resp.hover()));
-            ui.label(
-                close.x + 5.0,
-                close.y + 1.0,
-                "×",
+            ui.fill_round(
+                close,
+                t.chip_hover.lerp(t.accent, resp.hover()),
+                close.w / 2.0,
+            );
+            let (cx, cy) = (close.x + close.w / 2.0, close.y + close.h / 2.0);
+            ui.icon_line(
+                LineIcon::Cross,
+                (cx, cy),
+                CROSS_SIZE,
                 t.chip_fg,
-                size,
                 r.z + 0.002,
             );
             if resp.clicked {
@@ -88,10 +92,10 @@ impl Widget for TagList<'_> {
         }
         let field = Rect::new(x, y, field_w, h).with_z(r.z);
         let mut changed = false;
-        if ui
-            .text_field((self.id, "add"), field, self.input, self.edit)
-            .submitted
-        {
+        let field_id = (self.id, "add");
+        let input = TextInput::new(field, field_id, self.input).placeholder("Add…");
+        if ui.add(input) {
+            ui.set_focus(Some(key_hash(field_id)));
             let tag = self.input.trim().to_string();
             if !tag.is_empty() && !self.tags.contains(&tag) {
                 self.tags.push(tag);

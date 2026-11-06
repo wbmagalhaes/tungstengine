@@ -1,3 +1,6 @@
+use crate::color::Color;
+use std::hash::Hash;
+
 use crate::animation::Ease;
 use crate::ui::immediate::UI;
 use crate::ui::rect::Rect;
@@ -8,7 +11,7 @@ const BOX_HOVER: Transition = Transition::new(0.1, Ease::OutCubic).exit(0.2, Eas
 const MARK_TRANSITION: Transition = Transition::new(0.1, Ease::OutCubic).exit(0.2, Ease::InOutQuad);
 
 const BORDER: f32 = 2.0;
-const MARK_INSET: f32 = 5.0;
+const MARK_INSET_SHARE: f32 = 0.25;
 const MAX_RADIUS_SHARE: f32 = 0.25;
 
 pub struct Checkbox<'a> {
@@ -42,6 +45,20 @@ impl<'a> Checkbox<'a> {
     }
 }
 
+pub(crate) fn check_box(ui: &mut UI, bx: Rect, id: impl Hash, checked: bool, edge: Color) {
+    let t = ui.theme;
+    let radius = t.border_radius.min(bx.w * MAX_RADIUS_SHARE);
+    ui.fill_bordered(bx, t.field_bg, radius, BORDER, edge);
+    let target = f32::from(u8::from(checked));
+    let shown = ui.transition(id, target, MARK_TRANSITION);
+    if shown > 0.0 {
+        let inset = bx.w * MARK_INSET_SHARE;
+        let mark = bx.with_padding(inset).inner().with_z(bx.z + 0.002);
+        let color = t.mark.with_alpha(t.mark.a * shown);
+        ui.fill_round(mark, color, (radius - inset).max(0.0));
+    }
+}
+
 impl Widget for Checkbox<'_> {
     type Out = Response;
 
@@ -58,15 +75,7 @@ impl Widget for Checkbox<'_> {
         }
         let bx = Rect::new(x, y + 2.0, 20.0, 20.0).with_z(z);
         let edge = t.accent.lerp(t.button_fg, resp.hover() * 0.3);
-        let radius = t.border_radius.min(bx.w * MAX_RADIUS_SHARE);
-        ui.fill_bordered(bx, t.field_bg, radius, BORDER, edge);
-        let target = f32::from(u8::from(*self.value));
-        let shown = ui.transition(("checkbox-mark", self.label), target, MARK_TRANSITION);
-        if shown > 0.0 {
-            let mark = bx.with_padding(MARK_INSET).inner().with_z(z + 0.002);
-            let color = t.mark.with_alpha(t.mark.a * shown);
-            ui.fill_round(mark, color, (radius - MARK_INSET).max(0.0));
-        }
+        check_box(ui, bx, ("checkbox-mark", self.label), *self.value, edge);
         ui.label(x + 28.0, y + 3.0, self.label, t.label, size, z);
         resp
     }

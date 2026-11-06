@@ -8,7 +8,7 @@ use std::hash::{BuildHasherDefault, Hash, Hasher};
 
 use super::animation::{Anim, Presence, apply_anim, bbox_center};
 use super::font;
-use super::input::EditInput;
+use super::input::{EditInput, next_word, prev_word};
 use super::layout::{Dir, Layout};
 use super::rect::Rect;
 use super::sprite::{ClipRound, DrawRect, RoundGradient, RoundShape, SpriteDraw};
@@ -20,7 +20,9 @@ use crate::color::Color;
 use crate::input::Pointer;
 use crate::sprites::SpriteArg;
 
+pub const FIELD_PAD: f32 = 10.0;
 const ROUND_BLEED: f32 = 1.0;
+const PLACEHOLDER_ALPHA: f32 = 0.45;
 const HOVER_TRANSITION: Transition =
     Transition::new(0.12, Ease::OutCubic).exit(0.22, Ease::InOutQuad);
 
@@ -65,10 +67,34 @@ pub struct TextEdit {
     pub end: bool,
     pub enter: bool,
     pub shift: bool,
+    pub ctrl: bool,
     pub select_all: bool,
     pub copy: bool,
     pub cut: bool,
     pub paste: Option<String>,
+}
+
+impl From<super::input::EditInput> for TextEdit {
+    fn from(e: super::input::EditInput) -> Self {
+        TextEdit {
+            typed: e.typed,
+            backspace: e.backspace,
+            delete: e.delete,
+            left: e.left,
+            right: e.right,
+            up: e.up,
+            down: e.down,
+            home: e.home,
+            end: e.end,
+            enter: e.enter,
+            shift: e.shift,
+            ctrl: e.ctrl,
+            select_all: e.select_all,
+            copy: e.copy,
+            cut: e.cut,
+            paste: e.paste,
+        }
+    }
 }
 
 const MULTI_CLICK_SECS: f32 = 0.35;
@@ -100,7 +126,24 @@ fn word_at(s: &str, at: usize) -> (usize, usize) {
 pub struct FieldResponse {
     pub changed: bool,
     pub submitted: bool,
+    pub entered: bool,
     pub focused: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LineIcon {
+    Minus,
+    Plus,
+    Cross,
+    ChevronDown,
+    ChevronUp,
+}
+
+#[derive(Clone, Copy)]
+pub struct FieldLook<'a> {
+    pub px: f32,
+    pub radii: [f32; 4],
+    pub placeholder: Option<&'a str>,
 }
 
 #[derive(Clone, Debug)]
@@ -135,7 +178,6 @@ pub struct UI {
     focus: Option<u64>,
     keyboard_used: bool,
     edit: EditInput,
-    focused: Option<u64>,
     caret: usize,
     sel_anchor: usize,
     clipboard_out: Option<String>,
@@ -184,9 +226,6 @@ impl UI {
     pub fn set_edit(&mut self, edit: EditInput) {
         self.keyboard_used = false;
         self.edit = edit;
-        if self.clicked {
-            self.focused = None;
-        }
     }
 
     pub fn keyboard_used(&self) -> bool {
@@ -194,11 +233,11 @@ impl UI {
     }
 
     pub fn focused_id(&self) -> Option<u64> {
-        self.focused
+        self.focus
     }
 
     pub fn set_focus(&mut self, focus: Option<u64>) {
-        self.focused = focus;
+        self.focus = focus;
     }
 
     pub fn caret_sel(&self) -> (usize, usize) {
@@ -235,13 +274,13 @@ impl UI {
     }
 
     pub fn focus(&mut self, id: impl Hash) {
-        self.focused = Some(key_hash(id));
+        self.focus = Some(key_hash(id));
         self.caret = usize::MAX;
         self.sel_anchor = usize::MAX;
     }
 
     pub fn is_focused(&self, id: impl Hash) -> bool {
-        self.focused == Some(key_hash(id))
+        self.focus == Some(key_hash(id))
     }
 
     pub fn backdrop(&mut self) {
@@ -340,16 +379,18 @@ impl UI {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn field_input(
         &mut self,
         key: u64,
         rect: Rect,
         value: &mut String,
         edit: &TextEdit,
+        (radii, multiline): ([f32; 4], bool),
         hit: impl Fn(&Self, &str) -> usize,
         vertical: impl Fn(&Self, &str, usize, i32) -> usize,
     ) -> (FieldResponse, bool, usize, usize) {
-        let hover = rect.contains(self.cursor);
+        let hover = self.pointer_over(rect);
         let len = value.chars().count();
         let (mut caret, mut anchor) = self.carets.get(&key).copied().unwrap_or((len, len));
         caret = caret.min(len);
@@ -390,6 +431,9 @@ impl UI {
             self.drag_field = None;
         }
         let focused = self.focus == Some(key);
+        if focused {
+            self.mark_keyboard();
+        }
         let mut out = FieldResponse {
             submitted: blurred,
             ..Default::default()
@@ -401,11 +445,20 @@ impl UI {
             }
             if (edit.copy || edit.cut) && caret != anchor {
                 let (a, b) = range(caret, anchor);
-                self.copied = Some(value[byte_at(value, a)..byte_at(value, b)].to_string());
+                let text = value[byte_at(value, a)..byte_at(value, b)].to_string();
+                self.clipboard_out = Some(text.clone());
+                self.copied = Some(text);
             }
             let mut insert = edit.typed.clone();
             if let Some(text) = &edit.paste {
-                insert.push_str(&text.replace(['\r', '\n'], " "));
+                if multiline {
+                    insert.push_str(&text.replace('\r', ""));
+                } else {
+                    insert.push_str(&text.replace(['\r', '\n'], " "));
+                }
+            }
+            if multiline && edit.enter {
+                insert.push('\n');
             }
             let erase = edit.cut || edit.backspace || edit.delete || !insert.is_empty();
             if erase && caret != anchor {
@@ -431,7 +484,14 @@ impl UI {
             }
             let len = value.chars().count();
             let collapse = caret != anchor && !edit.shift;
-            let moved = if edit.left {
+            let moved = if edit.ctrl && (edit.left || edit.right) {
+                let chars: Vec<char> = value.chars().collect();
+                Some(if edit.left {
+                    prev_word(&chars, caret)
+                } else {
+                    next_word(&chars, caret)
+                })
+            } else if edit.left {
                 Some(if collapse {
                     caret.min(anchor)
                 } else {
@@ -460,24 +520,14 @@ impl UI {
                     anchor = c;
                 }
             }
-            if edit.enter {
+            if edit.enter && !multiline {
                 out.submitted = true;
+                out.entered = true;
                 self.focus = None;
             }
         }
         self.carets.insert(key, (caret, anchor));
-        let border = if focused {
-            Color::hex("#f0c040")
-        } else if hover {
-            Color::hex("#8a80b0")
-        } else {
-            Color::hex("#4a4060")
-        };
-        self.fill(rect, border);
-        self.fill(
-            rect.with_padding(1.0).inner().with_z(rect.z + 0.001),
-            Color::hex("#14101e"),
-        );
+        self.field_corners(rect, focused, radii);
         out.focused = focused;
         (out, focused, caret, anchor)
     }
@@ -491,7 +541,7 @@ impl UI {
         let x1 = self.text_width(px, &text[..byte_at(text, to)]);
         self.fill(
             Rect::new(x + x0, y, (x1 - x0).max(2.0), px * 1.15).with_z(z),
-            Color::hex("#3a5fa8").with_alpha(0.75),
+            self.theme.accent.with_alpha(0.35),
         );
     }
 
@@ -508,20 +558,27 @@ impl UI {
     }
 
     fn wrapped_spans(&self, px: f32, text: &str, width: f32) -> Vec<(usize, String)> {
-        let mut off = 0;
-        self.wrap_text(px, text, width)
-            .into_iter()
-            .map(|line| {
-                let start = off;
-                off += line.chars().count() + 1;
-                (start, line)
-            })
-            .collect()
+        let mut spans = Vec::new();
+        let mut base = 0;
+        for paragraph in text.split('\n') {
+            let lines = self.wrap_text(px, paragraph, width);
+            if lines.is_empty() {
+                spans.push((base, String::new()));
+            }
+            let mut off = base;
+            for line in lines {
+                let length = line.chars().count();
+                spans.push((off, line));
+                off += length + 1;
+            }
+            base += paragraph.chars().count() + 1;
+        }
+        spans
     }
 
     fn caret(&mut self, x: f32, y: f32, px: f32, z: f32) {
         if (self.time * 2.0).fract() < 0.5 {
-            self.fill(Rect::new(x, y, 2.0, px).with_z(z), Color::WHITE);
+            self.fill(Rect::new(x, y, 2.0, px).with_z(z), self.theme.button_fg);
         }
     }
 
@@ -532,11 +589,26 @@ impl UI {
         value: &mut String,
         edit: &TextEdit,
     ) -> FieldResponse {
-        let key = key_hash(id);
-        let px = (rect.h * 0.55).min(15.0);
+        let look = FieldLook {
+            px: (rect.h * 0.55).min(15.0),
+            radii: [self.theme.border_radius; 4],
+            placeholder: None,
+        };
+        self.field_line(key_hash(id), rect, value, edit, look)
+    }
+
+    pub fn field_line(
+        &mut self,
+        key: u64,
+        rect: Rect,
+        value: &mut String,
+        edit: &TextEdit,
+        look: FieldLook,
+    ) -> FieldResponse {
+        let px = look.px;
         let shift_of = |ui: &Self, value: &str, caret: usize| {
             let cx = ui.text_width(px, &value[..byte_at(value, caret)]);
-            (cx - (rect.w - 12.0)).max(0.0)
+            (cx - (rect.w - FIELD_PAD * 2.0)).max(0.0)
         };
         let prev = self.carets.get(&key).map_or(usize::MAX, |c| c.0);
         let (out, focused, caret, anchor) = self.field_input(
@@ -544,9 +616,10 @@ impl UI {
             rect,
             value,
             edit,
+            (look.radii, false),
             |ui, v| {
                 let shift = shift_of(ui, v, prev.min(v.chars().count()));
-                ui.nearest_char(px, v, ui.cursor.0 - rect.x - 6.0 + shift)
+                ui.nearest_char(px, v, ui.cursor.0 - rect.x - FIELD_PAD + shift)
             },
             |_, v, c, dir| match dir {
                 i32::MIN => 0,
@@ -558,25 +631,30 @@ impl UI {
         self.push_clip(rect);
         let cx = self.text_width(px, &value[..byte_at(value, caret)]);
         let shift = shift_of(self, value, caret);
+        let ink = self.theme.label;
+        if let Some(hint) = look.placeholder.filter(|_| value.is_empty()) {
+            let faded = ink.with_alpha(PLACEHOLDER_ALPHA);
+            self.glyphs(rect.x + FIELD_PAD, ty, px, hint, faded, rect.z + 0.002);
+        }
         self.glyphs(
-            rect.x + 6.0 - shift,
+            rect.x + FIELD_PAD - shift,
             ty,
             px,
             value,
-            Color::WHITE,
+            ink,
             rect.z + 0.002,
         );
         if focused {
             let (from, to) = (caret.min(anchor), caret.max(anchor));
             self.selection(
-                rect.x + 6.0 - shift,
+                rect.x + FIELD_PAD - shift,
                 ty,
                 px,
                 value,
                 (from, to),
                 rect.z + 0.0015,
             );
-            self.caret(rect.x + 6.0 - shift + cx, ty, px, rect.z + 0.003);
+            self.caret(rect.x + FIELD_PAD - shift + cx, ty, px, rect.z + 0.003);
         }
         self.pop_clip();
         out
@@ -607,10 +685,26 @@ impl UI {
         value: &mut String,
         edit: &TextEdit,
     ) -> FieldResponse {
-        let key = key_hash(id);
-        let px = 14.0;
+        let look = FieldLook {
+            px: 14.0,
+            radii: [self.theme.border_radius; 4],
+            placeholder: None,
+        };
+        self.field_area(key_hash(id), rect, value, edit, look, false)
+    }
+
+    pub fn field_area(
+        &mut self,
+        key: u64,
+        rect: Rect,
+        value: &mut String,
+        edit: &TextEdit,
+        look: FieldLook,
+        multiline: bool,
+    ) -> FieldResponse {
+        let px = look.px;
         let line_h = px * 1.35;
-        let width = rect.w - 12.0;
+        let width = rect.w - FIELD_PAD * 2.0;
         let visible = ((rect.h - 8.0) / line_h).floor().max(1.0) as usize;
         let line_of = |spans: &[(usize, String)], caret: usize| {
             spans
@@ -629,12 +723,13 @@ impl UI {
             rect,
             value,
             edit,
+            (look.radii, multiline),
             |ui, v| {
                 let spans = ui.wrapped_spans(px, v, width);
                 let first = first_of(&spans, prev.min(v.chars().count()));
                 let row = ((ui.cursor.1 - rect.y - 4.0) / line_h).floor().max(0.0) as usize;
                 let (start, line) = &spans[(first + row).min(spans.len() - 1)];
-                start + ui.nearest_char(px, line, ui.cursor.0 - rect.x - 6.0)
+                start + ui.nearest_char(px, line, ui.cursor.0 - rect.x - FIELD_PAD)
             },
             |ui, v, c, dir| {
                 let spans = ui.wrapped_spans(px, v, width);
@@ -659,9 +754,21 @@ impl UI {
         let spans = self.wrapped_spans(px, value, width);
         let first = first_of(&spans, caret);
         self.push_clip(rect);
+        if let Some(hint) = look.placeholder.filter(|_| value.is_empty()) {
+            let faded = self.theme.label.with_alpha(PLACEHOLDER_ALPHA);
+            self.glyphs(
+                rect.x + FIELD_PAD,
+                rect.y + 4.0,
+                px,
+                hint,
+                faded,
+                rect.z + 0.002,
+            );
+        }
         for (n, (_, line)) in spans.iter().skip(first).take(visible).enumerate() {
             let y = rect.y + 4.0 + n as f32 * line_h;
-            self.glyphs(rect.x + 6.0, y, px, line, Color::WHITE, rect.z + 0.002);
+            let ink = self.theme.label;
+            self.glyphs(rect.x + FIELD_PAD, y, px, line, ink, rect.z + 0.002);
         }
         if focused {
             let (from, to) = (caret.min(anchor), caret.max(anchor));
@@ -671,7 +778,7 @@ impl UI {
                 if a < b {
                     let y = rect.y + 4.0 + (n - first) as f32 * line_h;
                     self.selection(
-                        rect.x + 6.0,
+                        rect.x + FIELD_PAD,
                         y,
                         px,
                         text,
@@ -683,7 +790,7 @@ impl UI {
             let line = line_of(&spans, caret);
             let (start, text) = &spans[line];
             let col = (caret - start).min(text.chars().count());
-            let x = rect.x + 6.0 + self.text_width(px, &text[..byte_at(text, col)]);
+            let x = rect.x + FIELD_PAD + self.text_width(px, &text[..byte_at(text, col)]);
             let n = (line - first) as f32;
             self.caret(x, rect.y + 4.0 + n * line_h, px, rect.z + 0.003);
         }
@@ -1225,6 +1332,52 @@ impl UI {
         };
         state.value = state.from + (state.target - state.from) * ease.apply(progress);
         state.value
+    }
+
+    pub fn icon_line(
+        &mut self,
+        icon: LineIcon,
+        center: (f32, f32),
+        size: f32,
+        color: Color,
+        z: f32,
+    ) {
+        let (x, y) = center;
+        let h = size / 2.0;
+        let width = (size * 0.18).max(1.5);
+        match icon {
+            LineIcon::Minus | LineIcon::Plus => {
+                let across = Rect::new(x - h, y - width / 2.0, size, width).with_z(z);
+                self.fill_round(across, color, width / 2.0);
+                if matches!(icon, LineIcon::Plus) {
+                    let down = Rect::new(x - width / 2.0, y - h, width, size).with_z(z);
+                    self.fill_round(down, color, width / 2.0);
+                }
+            }
+            LineIcon::Cross => {
+                self.line_z((x - h, y - h), (x + h, y + h), color, width, z);
+                self.line_z((x - h, y + h), (x + h, y - h), color, width, z);
+            }
+            LineIcon::ChevronDown | LineIcon::ChevronUp => {
+                let tip = if matches!(icon, LineIcon::ChevronDown) {
+                    h / 2.0
+                } else {
+                    -h / 2.0
+                };
+                self.line_z((x - h, y - tip), (x, y + tip), color, width, z);
+                self.line_z((x + h, y - tip), (x, y + tip), color, width, z);
+            }
+        }
+    }
+
+    pub fn field_box(&mut self, r: Rect, focused: bool) {
+        self.field_corners(r, focused, [self.theme.border_radius; 4]);
+    }
+
+    pub fn field_corners(&mut self, r: Rect, focused: bool, radii: [f32; 4]) {
+        let t = self.theme;
+        let edge = if focused { t.accent } else { t.panel_border };
+        self.fill_corners(r, t.field_bg, radii, 1.0, edge);
     }
 
     pub fn fill_round(&mut self, r: Rect, color: Color, radius: f32) {
@@ -2036,6 +2189,36 @@ mod field_tests {
         let r = ui.text_field("f", Rect::new(10.0, 10.0, 300.0, 28.0), value, &edit);
         ui.finish();
         r
+    }
+
+    #[test]
+    fn line_breaks_start_new_rows_with_right_offsets() {
+        let ui = UI::new();
+        let spans = ui.wrapped_spans(14.0, "ab\n\ncd\n", 1000.0);
+        let starts: Vec<usize> = spans.iter().map(|s| s.0).collect();
+        assert_eq!(starts, vec![0, 3, 4, 7]);
+        assert_eq!(spans[2].1, "cd");
+    }
+
+    #[test]
+    fn select_all_copy_and_paste_reach_the_field() {
+        let mut ui = UI::new();
+        let mut v = String::from("abc");
+        frame(&mut ui, &mut v, (20.0, 20.0), true, TextEdit::default());
+        frame(&mut ui, &mut v, (20.0, 20.0), false, TextEdit::default());
+        let all = crate::ui::input::EditInput {
+            select_all: true,
+            copy: true,
+            ..Default::default()
+        };
+        frame(&mut ui, &mut v, (20.0, 20.0), false, all.into());
+        assert_eq!(ui.take_clipboard().as_deref(), Some("abc"));
+        let paste = crate::ui::input::EditInput {
+            paste: Some("xy".to_string()),
+            ..Default::default()
+        };
+        frame(&mut ui, &mut v, (20.0, 20.0), false, paste.into());
+        assert_eq!(v, "xy");
     }
 
     #[test]

@@ -2,12 +2,12 @@ use std::f32::consts::FRAC_PI_2;
 use std::hash::Hash;
 
 use crate::animation::Ease;
-use crate::ui::immediate::{UI, key_hash};
+use crate::ui::immediate::{FIELD_PAD, UI, key_hash};
 use crate::ui::rect::Rect;
 use crate::ui::style::{ComputedStyle, LinearGradient, Styled, Transition};
 use crate::ui::widget::{Response, Text, Widget};
 
-const TEXT_PAD: f32 = 12.0;
+const FILL_INSET: f32 = 2.0;
 const FILL_START_ALPHA: f32 = 0.3;
 const FILL_END_ALPHA: f32 = 0.85;
 const HANDLE_WIDTH: f32 = 4.0;
@@ -99,8 +99,9 @@ impl Widget for Slider<'_> {
         let radius = t.border_radius;
         ui.fill_bordered(r, t.field_bg, radius, 1.0, t.panel_border);
 
-        ui.push_clip_round(r, radius);
-        let fill = Rect::new(r.x, r.y, at - r.x, r.h).with_z(r.z + 0.001);
+        let inner = r.with_padding(FILL_INSET).inner().with_z(r.z);
+        ui.push_clip_round(inner, (radius - FILL_INSET).max(0.0));
+        let fill = Rect::new(inner.x, inner.y, at - inner.x, inner.h).with_z(r.z + 0.001);
         let look = ComputedStyle {
             gradient: Some(LinearGradient {
                 angle: FRAC_PI_2,
@@ -140,13 +141,13 @@ impl Widget for Slider<'_> {
         let text_z = r.z + 0.004;
         if let Some(label) = self.label {
             ui.add(
-                Text::new(r.x + TEXT_PAD, text_y, label)
+                Text::new(r.x + FIELD_PAD, text_y, label)
                     .fg(t.button_fg)
                     .z(text_z),
             );
         }
         if let Some(readout) = self.readout {
-            let x = r.x + r.w - TEXT_PAD - ui.text_width(t.font_size, readout);
+            let x = r.x + r.w - FIELD_PAD - ui.text_width(t.font_size, readout);
             ui.add(Text::new(x, text_y, readout).fg(t.label).z(text_z));
         }
         resp

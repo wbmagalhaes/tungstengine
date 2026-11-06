@@ -60,6 +60,7 @@ impl Input {
             end: self.key_pressed(KeyCode::End),
             shift: self.key_held(KeyCode::ShiftLeft) || self.key_held(KeyCode::ShiftRight),
             ctrl,
+            select_all: ctrl && self.key_pressed(KeyCode::KeyA),
             copy: ctrl && self.key_pressed(KeyCode::KeyC),
             cut: ctrl && self.key_pressed(KeyCode::KeyX),
             paste: (ctrl && self.key_pressed(KeyCode::KeyV))

@@ -12,6 +12,7 @@ pub struct EditInput {
     pub end: bool,
     pub shift: bool,
     pub ctrl: bool,
+    pub select_all: bool,
     pub copy: bool,
     pub cut: bool,
     pub paste: Option<String>,
@@ -22,19 +23,6 @@ pub struct CursorInput {
     pub pos: (f32, f32),
     pub clicked: bool,
     pub pressed: bool,
-}
-
-pub fn delete_selection(chars: &mut Vec<char>, caret: &mut usize, anchor: &mut usize) -> bool {
-    let lo = (*caret).min(*anchor);
-    let hi = (*caret).max(*anchor);
-    if lo < hi {
-        chars.drain(lo..hi);
-        *caret = lo;
-        *anchor = lo;
-        true
-    } else {
-        false
-    }
 }
 
 pub fn prev_word(chars: &[char], caret: usize) -> usize {

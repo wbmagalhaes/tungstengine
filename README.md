@@ -183,6 +183,10 @@ Set `pixel_perfect = true` in `manifest.toml` for pixel art: sprites land on who
 
 `Slider` edits 0 to 1 by default; `.range(min, max)` and `.step(n)` use real units, and `.readout(text)` shows the value however the game wants.
 
+`TextInput` and `TextArea` share one editing core: selection, word jumps, double and triple click, drag and clipboard work the same in both, and a line scrolls when it outgrows its box. `ui.icon_line` draws the small plus, minus, cross and chevron icons.
+
+`Switch` is an on and off toggle with a sliding knob, next to `Checkbox` for lists of choices.
+
 ## UI lists
 
 Widgets get their identity from their label, so repeated labels need a key. Debug builds warn when a label repeats in a frame.

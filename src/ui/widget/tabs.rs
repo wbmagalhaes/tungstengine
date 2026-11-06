@@ -2,7 +2,7 @@ use std::hash::Hash;
 
 use crate::ui::immediate::{UI, key_hash};
 use crate::ui::rect::Rect;
-use crate::ui::style::Styled;
+use crate::ui::style::{Style, Styled};
 use crate::ui::widget::{Button, Widget};
 
 pub struct Tabs<'a> {
@@ -11,6 +11,7 @@ pub struct Tabs<'a> {
     width: f32,
     gap: f32,
     selected: usize,
+    selected_style: Option<Style>,
     id: u64,
 }
 
@@ -22,6 +23,7 @@ impl<'a> Tabs<'a> {
             width: 160.0,
             gap: 10.0,
             selected: 0,
+            selected_style: None,
             id: 0,
         }
     }
@@ -33,6 +35,11 @@ impl<'a> Tabs<'a> {
 
     pub fn selected(mut self, selected: usize) -> Self {
         self.selected = selected;
+        self
+    }
+
+    pub fn selected_style(mut self, style: Style) -> Self {
+        self.selected_style = Some(style);
         self
     }
 
@@ -59,7 +66,10 @@ impl Widget for Tabs<'_> {
             .with_z(at.z);
             let mut b = Button::new(r, label).id((self.id, k)).z(at.z);
             if k == self.selected {
-                b = b.outline(selected_color, 3.0);
+                b = match self.selected_style {
+                    Some(style) => b.style(style).z(at.z),
+                    None => b.outline(selected_color, 3.0),
+                };
             }
             if ui.add(b).clicked() && k != self.selected {
                 pick = Some(k);

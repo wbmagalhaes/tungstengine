@@ -119,6 +119,24 @@ pub fn apply_anim(draws: &mut [DrawRect], frame: AnimFrame, center: [f32; 2], an
             }
         }
         d.color[3] *= frame.alpha;
+        if let Some(round) = d.round.as_mut() {
+            round.center[0] = cx + (round.center[0] - cx) * s + ox;
+            round.center[1] = cy + (round.center[1] - cy) * s + oy;
+            round.half = round.half.map(|h| h * s);
+            round.radii = round.radii.map(|r| r * s);
+            round.border *= s;
+            round.border_color[3] *= frame.alpha;
+            if let Some(gradient) = round.gradient.as_mut() {
+                gradient.via[3] *= frame.alpha;
+                gradient.to[3] *= frame.alpha;
+            }
+        }
+        if let Some(clip) = d.clip_round.as_mut() {
+            clip.center[0] = cx + (clip.center[0] - cx) * s + ox;
+            clip.center[1] = cy + (clip.center[1] - cy) * s + oy;
+            clip.half = clip.half.map(|h| h * s);
+            clip.radii = clip.radii.map(|r| r * s);
+        }
         if d.clip != ancestor && d.clip[2].is_finite() && d.clip[3].is_finite() {
             d.clip[0] = cx + (d.clip[0] - cx) * s + ox;
             d.clip[1] = cy + (d.clip[1] - cy) * s + oy;

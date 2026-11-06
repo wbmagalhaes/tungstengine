@@ -58,18 +58,12 @@ impl Widget for ColorList<'_> {
             let swatch = Rect::new(x, r.y, r.h, r.h).with_z(r.z);
             let open = self.editing.is_some_and(|(e, _)| e == n);
             let resp = ui.interact_curved(swatch, (self.id, n), SWATCH_HOVER);
-            ui.surface(
-                swatch,
-                if open {
-                    t.mark
-                } else {
-                    t.accent.lerp(t.button_fg, resp.hover() * 0.4)
-                },
-            );
-            ui.surface(
-                swatch.with_padding(2.0).inner().with_z(r.z + 0.001),
-                Color::hex(hex),
-            );
+            let edge = if open {
+                t.mark
+            } else {
+                t.accent.lerp(t.button_fg, resp.hover() * 0.4)
+            };
+            ui.fill_bordered(swatch, Color::hex(hex), t.border_radius, 2.0, edge);
             let label = self.labels.get(n).copied().unwrap_or(hex.as_str());
             ui.label(x + r.h + 6.0, r.y + 2.0, label, t.label, size, r.z);
             if !self.labels.is_empty() {

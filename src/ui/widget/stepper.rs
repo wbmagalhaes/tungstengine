@@ -1,9 +1,20 @@
 use std::hash::Hash;
 
-use crate::ui::immediate::{UI, key_hash};
+use crate::animation::Ease;
+use crate::ui::immediate::{LineIcon, UI, key_hash};
 use crate::ui::rect::Rect;
-use crate::ui::style::Styled;
-use crate::ui::widget::{Button, Response, Widget};
+use crate::ui::style::Transition;
+use crate::ui::widget::{Response, Widget};
+
+const END_INSET: f32 = 3.0;
+const END_TINT: f32 = 0.25;
+const END_DISABLED: f32 = 0.3;
+const ICON_SIZE: f32 = 12.0;
+const TRACK_GAP: f32 = 4.0;
+const SEGMENT_GAP: f32 = 4.0;
+const SEGMENT_HEIGHT: f32 = 8.0;
+const END_HOVER: Transition = Transition::new(0.08, Ease::OutCubic).exit(0.18, Ease::InOutQuad);
+const SEGMENT_HOVER: Transition = Transition::new(0.06, Ease::OutQuad).exit(0.16, Ease::OutCubic);
 
 pub struct Stepper<'a> {
     value: &'a mut f32,
@@ -38,44 +49,57 @@ impl Widget for Stepper<'_> {
         let level = (*self.value * steps as f32).round() as i32;
         let mut next = level;
         let side = r.h.min(44.0);
-        let button = |ui: &mut UI, at: Rect, label: &str, enabled: bool, key: &str| {
-            ui.add(
-                Button::new(at, label)
-                    .id((self.id, key))
-                    .enabled(enabled)
-                    .z(r.z),
-            )
-            .clicked()
+        ui.field_box(r, false);
+
+        let end_button = |ui: &mut UI, x: f32, key: &str, enabled: bool, plus: bool| {
+            let zone = Rect::new(x, r.y, side, r.h)
+                .with_padding(END_INSET)
+                .inner()
+                .with_z(r.z + 0.001);
+            let resp = ui.interact_curved(zone, (self.id, key), END_HOVER);
+            let lit = if enabled { resp.hover() } else { 0.0 };
+            if lit > 0.0 {
+                let radius = (t.border_radius - END_INSET).max(0.0);
+                ui.fill_round(zone, t.accent.with_alpha(END_TINT * lit), radius);
+            }
+            let ink = t.label.with_alpha(if enabled { 1.0 } else { END_DISABLED });
+            let (cx, cy) = (x + side / 2.0, r.y + r.h / 2.0);
+            let icon = if plus {
+                LineIcon::Plus
+            } else {
+                LineIcon::Minus
+            };
+            ui.icon_line(icon, (cx, cy), ICON_SIZE, ink, r.z + 0.002);
+            enabled && resp.clicked
         };
-        if button(ui, Rect::new(r.x, r.y, side, r.h), "-", level > 0, "minus") {
+        if end_button(ui, r.x, "minus", level > 0, false) {
             next -= 1;
         }
-        if button(
-            ui,
-            Rect::new(r.x + r.w - side, r.y, side, r.h),
-            "+",
-            level < steps,
-            "plus",
-        ) {
+        if end_button(ui, r.x + r.w - side, "plus", level < steps, true) {
             next += 1;
         }
-        let x0 = r.x + side + 12.0;
-        let span = r.w - 2.0 * side - 24.0;
+
+        let x0 = r.x + side + TRACK_GAP;
+        let span = r.w - 2.0 * side - TRACK_GAP * 2.0;
         let seg = span / steps as f32;
         for i in 0..steps {
-            let cell =
-                Rect::new(x0 + i as f32 * seg + 2.0, r.y + 6.0, seg - 4.0, r.h - 12.0).with_z(r.z);
-            let hover = cell.contains(ui.cursor);
+            let hit = Rect::new(x0 + i as f32 * seg, r.y, seg, r.h).with_z(r.z + 0.001);
+            let resp = ui.interact_curved(hit, (self.id, "seg", i), SEGMENT_HOVER);
             let on = i < level;
             let color = if on {
-                t.accent.lerp(t.button_fg, if hover { 0.25 } else { 0.0 })
-            } else if hover {
-                t.track_hover
+                t.accent.lerp(t.button_fg, resp.hover() * 0.25)
             } else {
-                t.track_off
+                t.track_hover.lerp(t.accent, resp.hover() * 0.35)
             };
-            ui.surface(cell, color);
-            if ui.interact_id(cell, (self.id, "seg", i)).clicked() {
+            let bar = Rect::new(
+                hit.x + SEGMENT_GAP / 2.0,
+                r.y + (r.h - SEGMENT_HEIGHT) / 2.0,
+                seg - SEGMENT_GAP,
+                SEGMENT_HEIGHT,
+            )
+            .with_z(r.z + 0.002);
+            ui.fill_round(bar, color, SEGMENT_HEIGHT / 2.0);
+            if resp.clicked {
                 next = if level == i + 1 { i } else { i + 1 };
             }
         }

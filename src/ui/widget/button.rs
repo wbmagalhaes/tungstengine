@@ -1,11 +1,17 @@
+use std::f32::consts::FRAC_PI_2;
 use std::hash::Hash;
 
 use crate::animation::Ease;
 use crate::color::Color;
 use crate::ui::immediate::{UI, key_hash};
 use crate::ui::rect::Rect;
-use crate::ui::style::{ComputedStyle, Stateful, Style, Styled, Transition};
+use crate::ui::style::{ComputedStyle, LinearGradient, Stateful, Style, Styled, Transition};
 use crate::ui::widget::{Response, Widget};
+
+const HOLD_TAIL: f32 = 0.04;
+const HOLD_HEAD: f32 = 0.32;
+const HOLD_EDGE: f32 = 2.0;
+const HOLD_EDGE_ALPHA: f32 = 0.75;
 
 const DEFAULT_HOVER: Style = Style {
     scale: Some((1.06, 1.06)),
@@ -159,10 +165,23 @@ impl Widget for Button<'_> {
                     let (progress, fired) = ui.hold_progress((id, "hold"), self.rect, secs);
                     if progress > 0.0 {
                         let r = self.rect;
-                        ui.surface(
-                            Rect::new(r.x, r.y, r.w * progress, r.h).with_z(r.z + 0.05),
-                            ui.theme.danger.with_alpha(0.45),
-                        );
+                        let front = r.w * progress;
+                        let ink = ui.theme.button_fg;
+                        let wash = ComputedStyle {
+                            gradient: Some(LinearGradient {
+                                angle: FRAC_PI_2,
+                                from: ink.with_alpha(HOLD_TAIL),
+                                via: None,
+                                to: ink.with_alpha(HOLD_HEAD),
+                            }),
+                            ..ComputedStyle::BASE
+                        };
+                        ui.push_clip_corners(r, look.border_radius);
+                        let fill = Rect::new(r.x, r.y, front, r.h).with_z(r.z + 0.001);
+                        ui.fill_styled(fill, ink, &wash);
+                        let edge = Rect::new(r.x + front - HOLD_EDGE, r.y, HOLD_EDGE, r.h);
+                        ui.fill(edge.with_z(r.z + 0.002), ink.with_alpha(HOLD_EDGE_ALPHA));
+                        ui.pop_clip();
                     }
                     fired
                 }
