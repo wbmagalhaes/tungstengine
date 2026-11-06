@@ -9,17 +9,23 @@ use crate::ui::style::{ComputedStyle, LinearGradient, Transition};
 use crate::ui::widget::Widget;
 
 const INSET: f32 = 3.0;
+const ICON_W: f32 = 20.0;
+const ICON_GAP: f32 = 7.0;
+const ICON_INSET: f32 = 6.0;
 const FILL_START_ALPHA: f32 = 0.4;
 const FILL_END_ALPHA: f32 = 0.9;
 const HOVER_TINT: f32 = 0.08;
 const SLIDE: Transition = Transition::new(0.2, Ease::OutCubic);
 const HOVER: Transition = Transition::new(0.08, Ease::OutCubic).exit(0.18, Ease::InOutQuad);
 
+pub type Leading<'a> = &'a dyn Fn(&mut UI, Rect, usize);
+
 pub struct Tabs<'a> {
     rect: Rect,
     labels: &'a [&'a str],
     width: f32,
     selected: usize,
+    leading: Option<Leading<'a>>,
     id: u64,
 }
 
@@ -30,6 +36,7 @@ impl<'a> Tabs<'a> {
             labels,
             width: 160.0,
             selected: 0,
+            leading: None,
             id: 0,
         }
     }
@@ -41,6 +48,11 @@ impl<'a> Tabs<'a> {
 
     pub fn selected(mut self, selected: usize) -> Self {
         self.selected = selected;
+        self
+    }
+
+    pub fn leading(mut self, f: Leading<'a>) -> Self {
+        self.leading = Some(f);
         self
     }
 
@@ -106,7 +118,17 @@ impl Widget for Tabs<'_> {
                 );
             }
             let ink = if chosen { t.button_fg } else { t.label };
-            let x = cell.x + (cell.w - ui.text_width(size, label)) / 2.0;
+            let icon = if self.leading.is_some() {
+                ICON_W + ICON_GAP
+            } else {
+                0.0
+            };
+            let x = cell.x + (cell.w - ui.text_width(size, label) - icon) / 2.0;
+            if let Some(draw) = self.leading {
+                let spot = Rect::new(x, cell.y + ICON_INSET, ICON_W, cell.h - ICON_INSET * 2.0);
+                draw(ui, spot.with_z(at.z + 0.002), k);
+            }
+            let x = x + icon;
             ui.label(
                 x,
                 cell.y + (cell.h - size) / 2.0,

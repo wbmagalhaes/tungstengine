@@ -193,6 +193,10 @@ Set `pixel_perfect = true` in `manifest.toml` for pixel art: sprites land on who
 
 Also in `ui`: `ProgressBar`, `Spinner`, `Badge`, `IconButton`, `Dialog`, `Toasts`, `ContextMenu`, `ScrollView` (vertical, horizontal or both with `.axis`, Shift and the wheel scroll sideways), `Accordion`, `RadioGroup`, `Slot` and `KeybindInput`. Pointer checks respect the current clip, so widgets scrolled out of view take no clicks.
 
+`menus::language_tabs`, `language_button` (sets one locale and shows its `flag-<locale>` sprite; `pt-BR` and `en-US` come with the engine, a game adds others by inserting that sprite) and `language_dropdown` switch the language.
+
+A locale file can set `[language] name = "..."` to name itself; `pt-BR` and `en-US` have built-in names.
+
 ## UI lists
 
 Widgets get their identity from their label, so repeated labels need a key. Debug builds warn when a label repeats in a frame.
@@ -206,6 +210,14 @@ for item in &shop {
 ## Testing
 
 `runtime::d2::Headless` and `runtime::d3::Headless` run a full game without a window, so tests can press keys, advance frames and read the world and on-screen text.
+
+## Conversations
+
+`dialog::conversation(world, ui)` draws the `Dialog` resource as a box at the bottom of the screen, with the speaker, typed text and choices. A click, Space, Enter or the gamepad South button finishes the line, then advances. Choices sit above the box, numbered: up and down, the d-pad or the left stick move the focus, Space, Enter or South picks, and a number key picks directly. The speaker in Yarn is an actor id, never shown: the name comes from `actor.<id>.name`, or `actor.<id>.unknown` until `<<reveal act:id>>`, in the locale files, falling back to the actor's fields. The portrait is the sprite in the actor's `portrait` field, or `actor-<id>`; `<<mood happy>>` in Yarn uses `actor-<id>-happy` when it exists, and `portrait_side` or `<<side right>>` moves it. Both last for the next line only. `Dialog::from_script(name, source)` loads Yarn from a string.
+
+## Rich text
+
+`RichText` takes inline tags: `[b]`, `[i]`, `[color=#hex]`, `[size=20]`, `[wave]`, `[shake]`, `[rainbow]`, `[pulse]` and `[icon=sprite]`. Conversations use it, and add `[pause=0.5/]` and `[speed=2]...[/speed]` for pacing. In Yarn, write tags that do not wrap text with `/]`, and colors without `#`, like `[color=b388ff]`, because `#` starts a line tag there.
 
 ## Web builds
 

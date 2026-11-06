@@ -89,7 +89,7 @@ impl YarnRunner {
                     DialogueEvent::Line(line) => {
                         return Presentation::Line {
                             actor: line.character_name().map(str::to_string),
-                            text: line_text(&line),
+                            text: marked_text(&line),
                         };
                     }
                     DialogueEvent::Options(opts) => {
@@ -139,6 +139,50 @@ fn line_text(line: &YarnLine) -> String {
     } else {
         line.text.clone()
     }
+}
+
+fn value_text(value: &MarkupValue) -> String {
+    match value {
+        MarkupValue::Integer(v) => v.to_string(),
+        MarkupValue::Float(v) => v.to_string(),
+        MarkupValue::String(v) => v.clone(),
+        MarkupValue::Bool(v) => v.to_string(),
+    }
+}
+
+fn marked_text(line: &YarnLine) -> String {
+    let chars: Vec<char> = line.text.chars().collect();
+    let mut start = 0;
+    let mut opens: Vec<(usize, String)> = Vec::new();
+    let mut closes: Vec<(usize, String)> = Vec::new();
+    for attr in &line.attributes {
+        if attr.name == "character" {
+            start = attr.position + attr.length;
+            continue;
+        }
+        let value = attr.properties.get(&attr.name).map(value_text);
+        let tag = match value {
+            Some(value) => format!("[{}={value}]", attr.name),
+            None => format!("[{}]", attr.name),
+        };
+        opens.push((attr.position, tag));
+        if attr.length > 0 {
+            closes.push((attr.position + attr.length, format!("[/{}]", attr.name)));
+        }
+    }
+    let mut out = String::new();
+    for i in start..=chars.len() {
+        for (_, tag) in closes.iter().filter(|(at, _)| *at == i) {
+            out.push_str(tag);
+        }
+        for (_, tag) in opens.iter().filter(|(at, _)| *at == i) {
+            out.push_str(tag);
+        }
+        if let Some(ch) = chars.get(i) {
+            out.push(*ch);
+        }
+    }
+    out.trim().to_string()
 }
 
 #[cfg(test)]

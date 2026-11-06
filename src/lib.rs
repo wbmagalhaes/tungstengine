@@ -10,6 +10,7 @@ pub mod color;
 pub mod dialog;
 pub mod ecs;
 pub mod fixed_step;
+pub mod flags;
 pub mod grid;
 pub mod input;
 pub mod localization;

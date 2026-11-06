@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::ecs::prelude::*;
 
-use super::actor::{Actor, Actors, load_actors};
+use super::actor::{Actor, Actors, PortraitSide, load_actors};
 use super::runner::{Presentation, YarnRunner};
 
 #[derive(Resource, Default)]
@@ -21,9 +21,24 @@ pub struct Dialog {
     pub options: Vec<String>,
     pub elapsed: f32,
     pub auto: bool,
+    pub focus: usize,
+    pub mood: Option<String>,
+    pub side: Option<PortraitSide>,
 }
 
 impl Dialog {
+    pub fn with_actors(mut self, actors: Actors) -> Self {
+        self.actors = actors;
+        self
+    }
+
+    pub fn from_script(name: &str, source: &str) -> Self {
+        Dialog {
+            runner: YarnRunner::from_source(name, source),
+            ..Dialog::default()
+        }
+    }
+
     pub fn load(dialogs_dir: &Path, actors_path: &Path) -> Self {
         Dialog {
             runner: YarnRunner::from_dir(dialogs_dir),
@@ -55,6 +70,8 @@ impl Dialog {
     pub fn talk(&mut self, node: &str, flags: &[String]) {
         self.queue.clear();
         self.using_runner = true;
+        self.mood = None;
+        self.side = None;
         if let Some(r) = self.runner.as_mut() {
             r.set_flags(flags);
         }
@@ -94,9 +111,22 @@ impl Dialog {
             };
             (runner.advance(), runner.drain_commands())
         };
+        let held = (self.mood.take(), self.side.take());
         for cmd in commands {
             if let Some(flag) = cmd.strip_prefix("flag ").map(str::trim) {
                 self.pending_flags.push(flag.to_string());
+                continue;
+            }
+            if let Some(mood) = cmd.strip_prefix("mood ").map(str::trim) {
+                self.mood = Some(mood.to_string());
+                continue;
+            }
+            if let Some(side) = cmd.strip_prefix("side ").map(str::trim) {
+                self.side = Some(if side == "right" {
+                    PortraitSide::Right
+                } else {
+                    PortraitSide::Left
+                });
                 continue;
             }
             if let Some(sound) = cmd.strip_prefix("sfx ").map(str::trim) {
@@ -120,12 +150,24 @@ impl Dialog {
         }
         match pres {
             Presentation::Line { actor, text } => {
-                self.speaker = actor.and_then(|id| self.actors.get(&id).cloned());
+                self.speaker = actor.map(|id| {
+                    self.actors.get(&id).cloned().unwrap_or(Actor {
+                        name: id.clone(),
+                        id,
+                        known: true,
+                        ..Actor::default()
+                    })
+                });
                 self.text = text;
                 self.options.clear();
                 self.elapsed = 0.0;
             }
-            Presentation::Options(opts) => self.options = opts,
+            Presentation::Options(opts) => {
+                self.options = opts;
+                self.focus = 0;
+                self.mood = self.mood.take().or(held.0);
+                self.side = self.side.or(held.1);
+            }
             Presentation::Done => {
                 self.active = false;
                 self.options.clear();
@@ -156,5 +198,27 @@ impl Dialog {
         self.active = false;
         self.options.clear();
         self.queue.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SCRIPT: &str = "title: Start\n---\n<<mood happy>>\n<<side right>>\nA: one\nA: two\n===\n";
+
+    #[test]
+    fn mood_and_side_last_one_line_and_reset_on_a_new_talk() {
+        let mut dialog = Dialog::from_script("t", SCRIPT);
+        dialog.talk("Start", &[]);
+        assert_eq!(dialog.mood.as_deref(), Some("happy"));
+        assert_eq!(dialog.side, Some(PortraitSide::Right));
+        dialog.advance();
+        assert_eq!(dialog.mood, None);
+        assert_eq!(dialog.side, None);
+        dialog.talk("Start", &[]);
+        dialog.close();
+        dialog.talk("Start", &[]);
+        assert_eq!(dialog.mood.as_deref(), Some("happy"));
     }
 }

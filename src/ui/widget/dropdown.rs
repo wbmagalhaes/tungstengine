@@ -13,6 +13,9 @@ use crate::ui::widget::Widget;
 
 const ROW_HOVER: Transition = Transition::new(0.05, Ease::OutQuad).exit(0.14, Ease::OutCubic);
 const DROP_GAP: f32 = 4.0;
+const LEADING_W: f32 = 22.0;
+const LEADING_GAP: f32 = 8.0;
+const LEADING_INSET: f32 = 8.0;
 const HINT_ALPHA: f32 = 0.45;
 const CLEAR_SIZE: f32 = 18.0;
 const CLEAR_RIGHT: f32 = 26.0;
@@ -31,6 +34,11 @@ const MAX_ROWS: usize = 8;
 const DECOR_W: f32 = 56.0;
 
 pub type Decorate<'a> = &'a dyn Fn(&mut UI, Rect, &str);
+
+fn leading_rect(row: Rect, z: f32) -> Rect {
+    let height = row.h - LEADING_INSET * 2.0;
+    Rect::new(row.x + FIELD_PAD, row.y + LEADING_INSET, LEADING_W, height).with_z(z)
+}
 
 fn decor_rect(row: Rect, right: f32) -> Rect {
     Rect::new(
@@ -88,7 +96,7 @@ fn head(
     ui: &mut UI,
     r: Rect,
     id: u64,
-    (text, hint): (&str, Option<&str>),
+    (text, hint, leading): (&str, Option<&str>, Option<Decorate>),
     state: &mut DropState,
 ) -> bool {
     let t = ui.theme;
@@ -100,8 +108,13 @@ fn head(
         Some(hint) => (hint, t.label.with_alpha(HINT_ALPHA)),
         None => (text, t.label),
     };
+    let mut text_x = r.x + FIELD_PAD;
+    if let Some(draw) = leading.filter(|_| !empty) {
+        draw(ui, leading_rect(r, r.z + 0.002), text);
+        text_x += LEADING_W + LEADING_GAP;
+    }
     ui.label(
-        r.x + FIELD_PAD,
+        text_x,
         r.y + (r.h - size) / 2.0,
         shown,
         ink,
@@ -128,14 +141,29 @@ fn popup(
     (r, id): (Rect, u64),
     options: &[&str],
     state: &mut DropState,
-    decorate: Option<Decorate>,
+    (decorate, leading): (Option<Decorate>, Option<Decorate>),
     mark: impl Fn(&str) -> Mark,
 ) -> Option<String> {
     let t = ui.theme;
     let size = t.font_size;
     let z = r.z + 1.0;
-    let search = Rect::new(r.x, r.y + r.h + DROP_GAP, r.w, r.h).with_z(z);
+    let needle = state.search.to_lowercase();
+    let shown: Vec<&str> = options
+        .iter()
+        .copied()
+        .filter(|o| needle.is_empty() || o.to_lowercase().contains(&needle))
+        .collect();
     let hide = !state.searchable;
+    let search_h = if hide { 0.0 } else { r.h };
+    let stack = search_h + r.h * shown.len().clamp(1, MAX_ROWS) as f32;
+    let below = r.y + r.h + DROP_GAP;
+    let opens_up = below + stack > ui.height;
+    let stack_top = if opens_up {
+        r.y - DROP_GAP - stack
+    } else {
+        below
+    };
+    let search = Rect::new(r.x, stack_top, r.w, r.h).with_z(z);
     if !hide {
         let hint = state.search_placeholder.as_deref().unwrap_or("Search…");
         let top = t.border_radius;
@@ -144,12 +172,6 @@ fn popup(
             .border_radius_corners(top, top, 0.0, 0.0);
         ui.add(input);
     }
-    let needle = state.search.to_lowercase();
-    let shown: Vec<&str> = options
-        .iter()
-        .copied()
-        .filter(|o| needle.is_empty() || o.to_lowercase().contains(&needle))
-        .collect();
     let view = Rect::new(
         r.x,
         if hide { search.y } else { search.y + r.h },
@@ -209,6 +231,10 @@ fn popup(
             Mark::Checked(_) => t.button_fg,
             _ => t.label,
         };
+        if let Some(draw) = leading {
+            draw(ui, leading_rect(row, z + 0.003), opt);
+            tx += LEADING_W + LEADING_GAP;
+        }
         ui.label(tx, row.y + (row.h - size) / 2.0, opt, fg, size, z + 0.003);
         if let Some(f) = decorate {
             f(ui, decor_rect(row, 28.0).with_z(z + 0.003), opt);
@@ -219,7 +245,9 @@ fn popup(
     }
     ui.pop_clip();
     ui.block_pointer(Rect::new(r.x, search.y, r.w, view.y + view.h - search.y).with_z(z));
-    let area = Rect::new(r.x, r.y, r.w, view.y + view.h - r.y);
+    let area_top = r.y.min(search.y);
+    let area_bottom = (r.y + r.h).max(view.y + view.h);
+    let area = Rect::new(r.x, area_top, r.w, area_bottom - area_top);
     if ui.clicked_outside(area) {
         state.open = false;
     }
@@ -232,6 +260,7 @@ pub struct Dropdown<'a> {
     selected: &'a mut String,
     state: &'a mut DropState,
     decorate: Option<Decorate<'a>>,
+    leading: Option<Decorate<'a>>,
     placeholder: Option<&'a str>,
     clearable: bool,
     id: u64,
@@ -251,6 +280,7 @@ impl<'a> Dropdown<'a> {
             selected,
             state,
             decorate: None,
+            leading: None,
             placeholder: None,
             clearable: false,
             id: key_hash(id),
@@ -264,6 +294,11 @@ impl<'a> Dropdown<'a> {
 
     pub fn placeholder(mut self, text: &'a str) -> Self {
         self.placeholder = Some(text);
+        self
+    }
+
+    pub fn leading(mut self, f: Decorate<'a>) -> Self {
+        self.leading = Some(f);
         self
     }
 
@@ -294,7 +329,7 @@ impl Widget for Dropdown<'_> {
             ui,
             self.rect,
             self.id,
-            (&text, self.placeholder),
+            (&text, self.placeholder, self.leading),
             self.state,
         ) || !self.state.open
         {
@@ -309,7 +344,7 @@ impl Widget for Dropdown<'_> {
                     (self.rect, self.id),
                     self.options,
                     self.state,
-                    self.decorate,
+                    (self.decorate, self.leading),
                     |o| {
                         if o == current {
                             Mark::Current
@@ -395,7 +430,7 @@ impl Widget for MultiSelect<'_> {
             ui,
             self.rect,
             self.id,
-            (&summary, self.placeholder),
+            (&summary, self.placeholder, None),
             self.state,
         ) || !self.state.open
         {
@@ -411,7 +446,7 @@ impl Widget for MultiSelect<'_> {
                     (self.rect, self.id),
                     self.options,
                     self.state,
-                    None,
+                    (None, None),
                     |o| match chosen.iter().position(|s| s == o) {
                         Some(p) => Mark::Checked(p),
                         None if full => Mark::Disabled,

@@ -6,6 +6,7 @@ use winit::window::Window;
 
 use crate::ecs::FastMap;
 use crate::ecs::prelude::*;
+use crate::render::ui::UiRenderer;
 use crate::ui::DrawRect;
 
 use super::post::{FULLSCREEN_VERTEX, PASSTHROUGH_FRAGMENT, PostRegistry};
@@ -28,43 +29,6 @@ impl Default for GfxConfig {
         }
     }
 }
-
-const UI_WGSL: &str = r#"
-struct Globals { screen: vec2<f32> };
-@group(0) @binding(0) var<uniform> globals: Globals;
-@group(0) @binding(1) var atlas: texture_2d<f32>;
-@group(0) @binding(2) var samp: sampler;
-
-struct VsIn {
-    @location(0) pos: vec2<f32>,
-    @location(1) uv: vec2<f32>,
-    @location(2) color: vec4<f32>,
-};
-struct VsOut {
-    @builtin(position) clip: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-    @location(1) color: vec4<f32>,
-};
-
-@vertex
-fn vs(in: VsIn) -> VsOut {
-    var out: VsOut;
-    let ndc = vec2<f32>(
-        in.pos.x / globals.screen.x * 2.0 - 1.0,
-        1.0 - in.pos.y / globals.screen.y * 2.0,
-    );
-    out.clip = vec4<f32>(ndc, 0.0, 1.0);
-    out.uv = in.uv;
-    out.color = in.color;
-    return out;
-}
-
-@fragment
-fn fs(in: VsOut) -> @location(0) vec4<f32> {
-    let a = textureSample(atlas, samp, in.uv).r;
-    return vec4<f32>(in.color.rgb, in.color.a * a);
-}
-"#;
 
 const MASK_WGSL: &str = r#"
 struct Camera { view_proj: mat4x4<f32> };
@@ -121,42 +85,6 @@ const SHADOW_RANGE: f32 = 22.0;
 const SHADOW_FOCUS_MAX: f32 = 40.0;
 const SHADOW_FOCUS_DEFAULT: f32 = 15.0;
 const SHADOW_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
-
-const SPRITE_UI_WGSL: &str = r#"
-struct Globals { screen: vec2<f32> };
-@group(0) @binding(0) var<uniform> globals: Globals;
-@group(0) @binding(1) var atlas: texture_2d<f32>;
-@group(0) @binding(2) var samp: sampler;
-
-struct VsIn {
-    @location(0) pos: vec2<f32>,
-    @location(1) uv: vec2<f32>,
-    @location(2) color: vec4<f32>,
-};
-struct VsOut {
-    @builtin(position) clip: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-    @location(1) color: vec4<f32>,
-};
-
-@vertex
-fn vs(in: VsIn) -> VsOut {
-    var out: VsOut;
-    let ndc = vec2<f32>(
-        in.pos.x / globals.screen.x * 2.0 - 1.0,
-        1.0 - in.pos.y / globals.screen.y * 2.0,
-    );
-    out.clip = vec4<f32>(ndc, 0.0, 1.0);
-    out.uv = in.uv;
-    out.color = in.color;
-    return out;
-}
-
-@fragment
-fn fs(in: VsOut) -> @location(0) vec4<f32> {
-    return textureSample(atlas, samp, in.uv) * in.color;
-}
-"#;
 
 const OUTLINE_WGSL: &str = r#"
 struct O { color: vec4<f32>, params: vec4<f32> };
@@ -247,14 +175,6 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(t.color.rgb, t.color.a * coverage);
 }
 "#;
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct UiVertex {
-    pos: [f32; 2],
-    uv: [f32; 2],
-    color: [f32; 4],
-}
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -486,19 +406,8 @@ pub struct Gfx {
     param_cursor: usize,
     gpu: GpuContext,
 
-    ui_pipeline: wgpu::RenderPipeline,
-    ui_bind_group: wgpu::BindGroup,
-    ui_uniform: wgpu::Buffer,
-    ui_vertex_buf: wgpu::Buffer,
-    ui_vertex_cap: u64,
-    ui_index_buf: wgpu::Buffer,
-    ui_index_cap: u64,
-    ui_verts: Vec<UiVertex>,
-    ui_indices: Vec<u32>,
-    ui_order: Vec<usize>,
-    sprite_pipeline: wgpu::RenderPipeline,
-    sprite_bind_groups: Vec<wgpu::BindGroup>,
     _sprite_textures: Vec<wgpu::Texture>,
+    ui_renderer: UiRenderer,
     atlas: wgpu::Texture,
     _atlas_view: wgpu::TextureView,
     _sampler: wgpu::Sampler,
@@ -591,160 +500,8 @@ impl Gfx {
             ..Default::default()
         });
 
-        let ui_uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ui-uniform"),
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let ui_vertex_cap = 4096 * std::mem::size_of::<UiVertex>() as u64;
-        let ui_vertex_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ui-verts"),
-            size: ui_vertex_cap,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let ui_index_cap = 6144 * std::mem::size_of::<u32>() as u64;
-        let ui_index_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ui-indices"),
-            size: ui_index_cap,
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let ui_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("ui-bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-
-        let ui_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("ui-bg"),
-            layout: &ui_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: ui_uniform.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&atlas_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        });
-
-        let ui_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("ui-shader"),
-            source: wgpu::ShaderSource::Wgsl(UI_WGSL.into()),
-        });
-        let ui_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("ui-layout"),
-            bind_group_layouts: &[Some(&ui_bgl)],
-            immediate_size: 0,
-        });
-        let ui_attrs = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4];
-        let ui_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("ui-pipeline"),
-            layout: Some(&ui_layout),
-            vertex: wgpu::VertexState {
-                module: &ui_shader,
-                entry_point: Some("vs"),
-                compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<UiVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &ui_attrs,
-                }],
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &ui_shader,
-                entry_point: Some("fs"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-
-        let sprite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("sprite-shader"),
-            source: wgpu::ShaderSource::Wgsl(SPRITE_UI_WGSL.into()),
-        });
-        let sprite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("sprite-pipeline"),
-            layout: Some(&ui_layout),
-            vertex: wgpu::VertexState {
-                module: &sprite_shader,
-                entry_point: Some("vs"),
-                compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<UiVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &ui_attrs,
-                }],
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &sprite_shader,
-                entry_point: Some("fs"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-        let sprite_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("sprite-sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
+        let mut ui_renderer = UiRenderer::new(device, config.format, &atlas_view, &sampler);
         let mut sprite_textures = Vec::new();
-        let mut sprite_bind_groups = Vec::new();
         for img in sprites.images() {
             let tex = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("sprite-texture"),
@@ -780,24 +537,7 @@ impl Gfx {
                 },
             );
             let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-            sprite_bind_groups.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("sprite-bg"),
-                layout: &ui_bgl,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: ui_uniform.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&sprite_sampler),
-                    },
-                ],
-            }));
+            ui_renderer.add_sprite(device, &view);
             sprite_textures.push(tex);
         }
 
@@ -1610,19 +1350,8 @@ impl Gfx {
 
         let mut gfx = Gfx {
             gpu,
-            ui_pipeline,
-            ui_bind_group,
-            ui_uniform,
-            ui_vertex_buf,
-            ui_vertex_cap,
-            ui_index_buf,
-            ui_index_cap,
-            ui_verts: Vec::new(),
-            ui_indices: Vec::new(),
-            ui_order: Vec::new(),
-            sprite_pipeline,
-            sprite_bind_groups,
             _sprite_textures: sprite_textures,
+            ui_renderer,
             atlas,
             _atlas_view: atlas_view,
             _sampler: sampler,
@@ -2402,119 +2131,10 @@ impl Gfx {
         }
 
         // UI geometry
-        let dims = [
-            self.gpu.config.width as f32,
-            self.gpu.config.height as f32,
-            0.0,
-            0.0,
-        ];
-
-        self.gpu
-            .queue
-            .write_buffer(&self.ui_uniform, 0, bytemuck::cast_slice(&dims));
-
-        let mut verts = std::mem::take(&mut self.ui_verts);
-        let mut indices = std::mem::take(&mut self.ui_indices);
-        let mut order = std::mem::take(&mut self.ui_order);
-        verts.clear();
-        indices.clear();
-        order.clear();
-        order.extend(0..quads.len());
-        order.sort_by(|&a, &b| {
-            quads[a].tex.cmp(&quads[b].tex).then_with(|| {
-                quads[a]
-                    .z
-                    .partial_cmp(&quads[b].z)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-        });
-
-        let sw = self.gpu.config.width as f32;
-        let sh = self.gpu.config.height as f32;
-        let scissor = |clip: [f32; 4]| -> [u32; 4] {
-            let x0 = clip[0].clamp(0.0, sw);
-            let y0 = clip[1].clamp(0.0, sh);
-            let x1 = (clip[0] + clip[2]).clamp(0.0, sw);
-            let y1 = (clip[1] + clip[3]).clamp(0.0, sh);
-            [x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32]
-        };
-
-        let mut ui_ranges: Vec<(u32, u32, u32, [u32; 4])> = Vec::new();
-        let mut cur: Option<(u32, [u32; 4])> = None;
-        let mut range_start = 0u32;
-        for &qi in &order {
-            let q = &quads[qi];
-            let sc = scissor(q.clip);
-            if cur != Some((q.tex, sc)) {
-                if let Some((t, s)) = cur {
-                    ui_ranges.push((t, range_start, indices.len() as u32 - range_start, s));
-                }
-                cur = Some((q.tex, sc));
-                range_start = indices.len() as u32;
-            }
-            let [x0, y0] = q.min;
-            let [x1, y1] = q.max;
-            let [p00, p10, p01, p11] = q.quad.unwrap_or([[x0, y0], [x1, y0], [x0, y1], [x1, y1]]);
-            let [u0, v0] = q.uv_min;
-            let [u1, v1] = q.uv_max;
-            let c = q.color;
-            let base = verts.len() as u32;
-            verts.push(UiVertex {
-                pos: p00,
-                uv: [u0, v0],
-                color: c,
-            });
-            verts.push(UiVertex {
-                pos: p10,
-                uv: [u1, v0],
-                color: c,
-            });
-            verts.push(UiVertex {
-                pos: p01,
-                uv: [u0, v1],
-                color: c,
-            });
-            verts.push(UiVertex {
-                pos: p11,
-                uv: [u1, v1],
-                color: c,
-            });
-            indices.extend_from_slice(&[base, base + 2, base + 3, base, base + 3, base + 1]);
-        }
-        if let Some((t, s)) = cur {
-            ui_ranges.push((t, range_start, indices.len() as u32 - range_start, s));
-        }
-
-        let vbytes: &[u8] = bytemuck::cast_slice(&verts);
-        if vbytes.len() as u64 > self.ui_vertex_cap {
-            self.ui_vertex_cap = (vbytes.len() as u64).next_power_of_two();
-            self.ui_vertex_buf = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("ui-verts"),
-                size: self.ui_vertex_cap,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-        }
-        if !vbytes.is_empty() {
-            self.gpu.queue.write_buffer(&self.ui_vertex_buf, 0, vbytes);
-        }
-        let ibytes: &[u8] = bytemuck::cast_slice(&indices);
-        if ibytes.len() as u64 > self.ui_index_cap {
-            self.ui_index_cap = (ibytes.len() as u64).next_power_of_two();
-            self.ui_index_buf = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("ui-indices"),
-                size: self.ui_index_cap,
-                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-        }
-        if !ibytes.is_empty() {
-            self.gpu.queue.write_buffer(&self.ui_index_buf, 0, ibytes);
-        }
-
-        self.ui_verts = verts;
-        self.ui_indices = indices;
-        self.ui_order = order;
+        let size = (self.gpu.config.width as f32, self.gpu.config.height as f32);
+        let device = &self.gpu.device;
+        self.ui_renderer
+            .prepare(device, &self.gpu.queue, quads, size);
 
         let frame = match self.gpu.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame)
@@ -2885,26 +2505,7 @@ impl Gfx {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if !ui_ranges.is_empty() {
-                pass.set_vertex_buffer(0, self.ui_vertex_buf.slice(..));
-                pass.set_index_buffer(self.ui_index_buf.slice(..), wgpu::IndexFormat::Uint32);
-            }
-            for (tex, start, count, sc) in &ui_ranges {
-                if sc[2] == 0 || sc[3] == 0 {
-                    continue;
-                }
-                if *tex == 0 {
-                    pass.set_pipeline(&self.ui_pipeline);
-                    pass.set_bind_group(0, &self.ui_bind_group, &[]);
-                } else if let Some(bg) = self.sprite_bind_groups.get(*tex as usize - 1) {
-                    pass.set_pipeline(&self.sprite_pipeline);
-                    pass.set_bind_group(0, bg, &[]);
-                } else {
-                    continue;
-                }
-                pass.set_scissor_rect(sc[0], sc[1], sc[2], sc[3]);
-                pass.draw_indexed(*start..*start + *count, 0, 0..1);
-            }
+            self.ui_renderer.draw(&mut pass, false);
         }
 
         // transition overlay (alpha mask over everything)

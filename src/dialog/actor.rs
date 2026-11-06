@@ -26,8 +26,18 @@ fn default_variation() -> f32 {
     0.2
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PortraitSide {
+    #[default]
+    Left,
+    Right,
+}
+
 #[derive(Clone, Deserialize)]
 pub struct Actor {
+    #[serde(skip)]
+    pub id: String,
     pub name: String,
     #[serde(default = "unknown_default")]
     pub unknown: String,
@@ -36,16 +46,23 @@ pub struct Actor {
     pub known: bool,
     #[serde(default = "default_accent")]
     pub accent: [u8; 3],
+    #[serde(default)]
+    pub portrait: Option<String>,
+    #[serde(default)]
+    pub portrait_side: PortraitSide,
 }
 
 impl Default for Actor {
     fn default() -> Self {
         Actor {
+            id: String::new(),
             name: String::new(),
             unknown: unknown_default(),
             voice: Voice::default(),
             known: false,
             accent: default_accent(),
+            portrait: None,
+            portrait_side: PortraitSide::default(),
         }
     }
 }
@@ -85,9 +102,26 @@ impl Actors {
     }
 }
 
+pub fn parse_actors(text: &str) -> Actors {
+    match toml::from_str::<HashMap<String, Actor>>(text) {
+        Ok(map) => with_ids(map),
+        Err(e) => {
+            log::error!("actors: {e}");
+            Actors::default()
+        }
+    }
+}
+
+fn with_ids(mut map: HashMap<String, Actor>) -> Actors {
+    for (id, actor) in &mut map {
+        actor.id = id.clone();
+    }
+    Actors { map }
+}
+
 pub fn load_actors(path: &Path) -> Actors {
     match fs::read_to_string(path).map(|t| toml::from_str::<HashMap<String, Actor>>(&t)) {
-        Ok(Ok(map)) => Actors { map },
+        Ok(Ok(map)) => with_ids(map),
         Ok(Err(e)) => {
             log::error!("actors `{}`: {e}", path.display());
             Actors::default()

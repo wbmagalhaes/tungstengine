@@ -18,6 +18,9 @@ pub enum Font {
     #[default]
     Sans,
     Mono,
+    Bold,
+    Italic,
+    BoldItalic,
 }
 
 #[derive(Clone, Copy)]
@@ -48,7 +51,7 @@ struct Atlas {
 }
 
 struct FontData {
-    faces: [Face; 2],
+    faces: [Face; 5],
     sprites: Vec<([f32; 2], [f32; 2])>,
     atlas: Mutex<Atlas>,
 }
@@ -104,6 +107,9 @@ pub fn configure_fonts(sans: Option<String>, mono: Option<String>) {
 
 const SANS_DEFAULT: &[u8] = include_bytes!("../../assets/fonts/DejaVuSans.ttf");
 const MONO_DEFAULT: &[u8] = include_bytes!("../../assets/fonts/JetBrainsMono-Regular.ttf");
+const BOLD: &[u8] = include_bytes!("../../assets/fonts/DejaVuSans-Bold.ttf");
+const ITALIC: &[u8] = include_bytes!("../../assets/fonts/DejaVuSans-Oblique.ttf");
+const BOLD_ITALIC: &[u8] = include_bytes!("../../assets/fonts/DejaVuSans-BoldOblique.ttf");
 
 fn face_bytes(path: Option<&String>, default: &'static [u8]) -> Vec<u8> {
     if let Some(p) = path.filter(|p| !p.is_empty()) {
@@ -226,7 +232,13 @@ fn build() -> FontData {
     atlas.reserved_h = atlas.pen_y;
 
     FontData {
-        faces: [sans, mono],
+        faces: [
+            sans,
+            mono,
+            load_face(BOLD),
+            load_face(ITALIC),
+            load_face(BOLD_ITALIC),
+        ],
         sprites,
         atlas: Mutex::new(atlas),
     }

@@ -1,8 +1,10 @@
 mod actor;
+mod conversation;
 mod runner;
 mod state;
 
-pub use actor::{Actor, Actors, Voice, load_actors};
+pub use actor::{Actor, Actors, PortraitSide, Voice, load_actors, parse_actors};
+pub use conversation::conversation;
 pub use runner::{Presentation, YarnRunner};
 pub use state::Dialog;
 

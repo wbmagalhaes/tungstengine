@@ -126,7 +126,7 @@ mod tests {
     #[test]
     fn stack_drops_the_oldest_past_the_limit() {
         let mut toasts = Toasts::default();
-        for i in 0..8 {
+        for i in 0..MAX_STACK + 3 {
             toasts.push(format!("{i}"));
         }
         assert_eq!(toasts.len(), MAX_STACK);

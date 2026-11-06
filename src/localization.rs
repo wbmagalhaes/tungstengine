@@ -62,6 +62,17 @@ impl Localization {
         Ok(())
     }
 
+    pub fn language_name(&self, locale: &str) -> String {
+        if let Some(name) = self.tables.get(locale).and_then(|t| t.get("language.name")) {
+            return name.to_string();
+        }
+        match locale {
+            "pt-BR" => "Português".to_string(),
+            "en-US" => "English".to_string(),
+            other => other.to_string(),
+        }
+    }
+
     pub fn has(&self, key: &str) -> bool {
         self.lookup(key).is_some()
     }

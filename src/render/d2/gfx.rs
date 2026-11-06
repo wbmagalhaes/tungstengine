@@ -4,302 +4,13 @@ use wgpu::util::DeviceExt;
 use winit::window::Window;
 
 use crate::color::Color;
+use crate::render::ui::{
+    QUAD_WGSL, QuadVertex, UiRenderer, bind_group, pipeline, quad_bind_layout, quad_layout,
+};
 use crate::sprites::Sprites;
-use crate::ui::{DrawRect, RoundShape};
+use crate::ui::DrawRect;
 
 use super::components::LayerShader;
-
-const QUAD_WGSL: &str = r#"
-struct Globals { screen: vec2<f32>, pad: vec2<f32> };
-@group(0) @binding(0) var<uniform> globals: Globals;
-@group(0) @binding(1) var tex: texture_2d<f32>;
-@group(0) @binding(2) var samp: sampler;
-
-struct VsIn {
-    @location(0) pos: vec2<f32>,
-    @location(1) uv: vec2<f32>,
-    @location(2) color: vec4<f32>,
-    @location(3) silhouette: f32,
-};
-struct VsOut {
-    @builtin(position) clip: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-    @location(1) color: vec4<f32>,
-    @location(2) silhouette: f32,
-};
-
-fn shade(texel: vec4<f32>, color: vec4<f32>, silhouette: f32) -> vec4<f32> {
-    return mix(texel * color, vec4<f32>(color.rgb, texel.a * color.a), silhouette);
-}
-
-@vertex
-fn vs(in: VsIn) -> VsOut {
-    var out: VsOut;
-    let ndc = vec2<f32>(
-        in.pos.x / globals.screen.x * 2.0 - 1.0,
-        1.0 - in.pos.y / globals.screen.y * 2.0,
-    );
-    out.clip = vec4<f32>(ndc, 0.0, 1.0);
-    out.uv = in.uv;
-    out.color = in.color;
-    out.silhouette = in.silhouette;
-    return out;
-}
-
-@fragment
-fn fs_mask(in: VsOut) -> @location(0) vec4<f32> {
-    let a = textureSample(tex, samp, in.uv).r;
-    return vec4<f32>(in.color.rgb, in.color.a * a);
-}
-
-@fragment
-fn fs_pixel(in: VsOut) -> @location(0) vec4<f32> {
-    let size = vec2<f32>(textureDimensions(tex));
-    let texel = (floor(in.uv * size) + vec2<f32>(0.5)) / size;
-    return shade(textureSample(tex, samp, texel), in.color, in.silhouette);
-}
-
-@fragment
-fn fs_mask_add(in: VsOut) -> @location(0) vec4<f32> {
-    let a = textureSample(tex, samp, in.uv).r * in.color.a;
-    return vec4<f32>(in.color.rgb * a, a);
-}
-
-@fragment
-fn fs_smooth_add(in: VsOut) -> @location(0) vec4<f32> {
-    let texel = textureSample(tex, samp, in.uv) * in.color;
-    return vec4<f32>(texel.rgb * texel.a, texel.a);
-}
-
-@fragment
-fn fs_smooth(in: VsOut) -> @location(0) vec4<f32> {
-    return shade(textureSample(tex, samp, in.uv), in.color, in.silhouette);
-}
-
-@fragment
-fn fs_rgba(in: VsOut) -> @location(0) vec4<f32> {
-    let size = vec2<f32>(textureDimensions(tex));
-    let px = in.uv * size;
-    let seam = floor(px + 0.5);
-    let width = max(fwidth(px), vec2<f32>(1e-4));
-    let snapped = seam + clamp((px - seam) / width, vec2<f32>(-0.5), vec2<f32>(0.5));
-    return shade(textureSample(tex, samp, snapped / size), in.color, in.silhouette);
-}
-"#;
-
-const RICH_WGSL: &str = r#"
-const GLASS_TAPS: i32 = 16;
-struct Globals { screen: vec2<f32>, pad: vec2<f32> };
-@group(0) @binding(0) var<uniform> globals: Globals;
-@group(0) @binding(1) var tex: texture_2d<f32>;
-@group(0) @binding(2) var samp: sampler;
-
-struct VsIn {
-    @location(0) pos: vec2<f32>,
-    @location(1) uv: vec2<f32>,
-    @location(2) color: vec4<f32>,
-    @location(3) silhouette: f32,
-    @location(4) local: vec2<f32>,
-    @location(5) half_size: vec2<f32>,
-    @location(6) radii: vec4<f32>,
-    @location(7) border: f32,
-    @location(8) border_color: vec4<f32>,
-    @location(9) clip_shape: vec4<f32>,
-    @location(10) clip_radii: vec4<f32>,
-    @location(11) gradient_to: vec4<f32>,
-    @location(12) gradient: vec2<f32>,
-    @location(13) gradient_via: vec4<f32>,
-    @location(14) sweep: vec2<f32>,
-};
-struct VsOut {
-    @builtin(position) clip: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-    @location(1) color: vec4<f32>,
-    @location(2) silhouette: f32,
-    @location(3) local: vec2<f32>,
-    @location(4) half_size: vec2<f32>,
-    @location(5) radii: vec4<f32>,
-    @location(6) border: f32,
-    @location(7) border_color: vec4<f32>,
-    @location(8) clip_shape: vec4<f32>,
-    @location(9) clip_radii: vec4<f32>,
-    @location(10) screen_pos: vec2<f32>,
-    @location(11) gradient_to: vec4<f32>,
-    @location(12) gradient: vec2<f32>,
-    @location(13) gradient_via: vec4<f32>,
-    @location(14) sweep: vec2<f32>,
-};
-
-fn shade(texel: vec4<f32>, color: vec4<f32>, silhouette: f32) -> vec4<f32> {
-    return mix(texel * color, vec4<f32>(color.rgb, texel.a * color.a), silhouette);
-}
-
-@vertex
-fn vs(in: VsIn) -> VsOut {
-    var out: VsOut;
-    let ndc = vec2<f32>(
-        in.pos.x / globals.screen.x * 2.0 - 1.0,
-        1.0 - in.pos.y / globals.screen.y * 2.0,
-    );
-    out.clip = vec4<f32>(ndc, 0.0, 1.0);
-    out.uv = in.uv;
-    out.color = in.color;
-    out.silhouette = in.silhouette;
-    out.local = in.local;
-    out.half_size = in.half_size;
-    out.radii = in.radii;
-    out.border = in.border;
-    out.border_color = in.border_color;
-    out.clip_shape = in.clip_shape;
-    out.clip_radii = in.clip_radii;
-    out.screen_pos = in.pos;
-    out.gradient_to = in.gradient_to;
-    out.gradient = in.gradient;
-    out.gradient_via = in.gradient_via;
-    out.sweep = in.sweep;
-    return out;
-}
-
-fn round_distance(p: vec2<f32>, half_size: vec2<f32>, radii: vec4<f32>) -> f32 {
-    let side = select(radii.wz, radii.xy, p.y < 0.0);
-    let r = select(side.y, side.x, p.x < 0.0);
-    let q = abs(p) - half_size + vec2<f32>(r);
-    return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r;
-}
-
-fn clip_cover(in: VsOut) -> f32 {
-    let d = round_distance(in.screen_pos - in.clip_shape.xy, in.clip_shape.zw, in.clip_radii);
-    let aa = max(fwidth(d), 1e-4);
-    return select(1.0, clamp(0.5 - d / aa, 0.0, 1.0), in.clip_shape.z > 0.0);
-}
-
-fn clipped(in: VsOut, paint: vec4<f32>) -> vec4<f32> {
-    return vec4<f32>(paint.rgb, paint.a * clip_cover(in));
-}
-
-fn sweep_paint(in: VsOut, d: f32) -> vec4<f32> {
-    let turn = atan2(in.local.y, in.local.x) / 6.2831853 + 0.5;
-    let wave = 0.5 + 0.5 * cos(6.2831853 * (turn - in.sweep.x));
-    let shine = wave * wave * wave;
-    let aa = max(fwidth(d), 1e-4);
-    let outer = clamp(0.5 - d / aa, 0.0, 1.0);
-    let inner = clamp(0.5 - (d + in.border) / aa, 0.0, 1.0);
-    let color = mix(in.border_color, in.gradient_to, shine);
-    return vec4<f32>(color.rgb, color.a * outer * (1.0 - inner));
-}
-
-fn round_paint(in: VsOut) -> vec4<f32> {
-    let d = round_distance(in.local, in.half_size, in.radii);
-    if (in.sweep.y > 0.5) {
-        return sweep_paint(in, d);
-    }
-    let aa = max(fwidth(d), 1e-4);
-    let outer = clamp(0.5 - d / aa, 0.0, 1.0);
-    let inner = clamp(0.5 - (d + in.border) / aa, 0.0, 1.0);
-    let along = vec2<f32>(sin(in.gradient.x), -cos(in.gradient.x));
-    let span = 2.0 * (abs(in.half_size.x * along.x) + abs(in.half_size.y * along.y));
-    let ramp = clamp(dot(in.local, along) / max(span, 1e-4) + 0.5, 0.0, 1.0);
-    let first = vec4<f32>(in.color.rgb * in.color.a, in.color.a);
-    let last = vec4<f32>(in.gradient_to.rgb * in.gradient_to.a, in.gradient_to.a);
-    let middle = vec4<f32>(in.gradient_via.rgb * in.gradient_via.a, in.gradient_via.a);
-    let lower = mix(first, middle, ramp * 2.0);
-    let upper = mix(middle, last, ramp * 2.0 - 1.0);
-    let fill = select(first, select(upper, lower, ramp < 0.5), in.gradient.y > 0.5);
-    let edge = vec4<f32>(in.border_color.rgb * in.border_color.a, in.border_color.a);
-    let painted = mix(edge, fill, select(inner, 1.0, in.border <= 0.0)) * outer;
-    return vec4<f32>(painted.rgb / max(painted.a, 1e-4), painted.a);
-}
-
-@fragment
-fn fs_glass(in: VsOut) -> @location(0) vec4<f32> {
-    let uv = in.screen_pos / globals.screen;
-    var behind = vec3<f32>(0.0);
-    for (var i = 0; i < GLASS_TAPS; i++) {
-        let tap = f32(i);
-        let reach = sqrt((tap + 0.5) / f32(GLASS_TAPS)) * in.sweep.x;
-        let turn = tap * 2.3999632;
-        let offset = vec2<f32>(cos(turn), sin(turn)) * reach / globals.screen;
-        behind += textureSampleLevel(tex, samp, uv + offset, 0.0).rgb;
-    }
-    behind /= f32(GLASS_TAPS);
-    let d = round_distance(in.local, in.half_size, in.radii);
-    let aa = max(fwidth(d), 1e-4);
-    let cover = clamp(0.5 - d / aa, 0.0, 1.0);
-    let paint = round_paint(in);
-    let mixed = behind * (1.0 - paint.a) + paint.rgb * paint.a;
-    return clipped(in, vec4<f32>(mixed, cover));
-}
-
-@fragment
-fn fs_mask(in: VsOut) -> @location(0) vec4<f32> {
-    let a = textureSample(tex, samp, in.uv).r;
-    let plain = vec4<f32>(in.color.rgb, in.color.a * a);
-    return clipped(in, select(plain, round_paint(in), in.half_size.x > 0.0));
-}
-
-@fragment
-fn fs_pixel(in: VsOut) -> @location(0) vec4<f32> {
-    let size = vec2<f32>(textureDimensions(tex));
-    let texel = (floor(in.uv * size) + vec2<f32>(0.5)) / size;
-    return clipped(in, shade(textureSample(tex, samp, texel), in.color, in.silhouette));
-}
-
-@fragment
-fn fs_mask_add(in: VsOut) -> @location(0) vec4<f32> {
-    let a = textureSample(tex, samp, in.uv).r * in.color.a;
-    return vec4<f32>(in.color.rgb * a, a) * clip_cover(in);
-}
-
-@fragment
-fn fs_smooth_add(in: VsOut) -> @location(0) vec4<f32> {
-    let texel = textureSample(tex, samp, in.uv) * in.color;
-    return vec4<f32>(texel.rgb * texel.a, texel.a) * clip_cover(in);
-}
-
-@fragment
-fn fs_smooth(in: VsOut) -> @location(0) vec4<f32> {
-    return clipped(in, shade(textureSample(tex, samp, in.uv), in.color, in.silhouette));
-}
-
-@fragment
-fn fs_rgba(in: VsOut) -> @location(0) vec4<f32> {
-    let size = vec2<f32>(textureDimensions(tex));
-    let px = in.uv * size;
-    let seam = floor(px + 0.5);
-    let width = max(fwidth(px), vec2<f32>(1e-4));
-    let snapped = seam + clamp((px - seam) / width, vec2<f32>(-0.5), vec2<f32>(0.5));
-    return clipped(in, shade(textureSample(tex, samp, snapped / size), in.color, in.silhouette));
-}
-"#;
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct QuadVertex {
-    pos: [f32; 2],
-    uv: [f32; 2],
-    color: [f32; 4],
-    silhouette: f32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct RichVertex {
-    pos: [f32; 2],
-    uv: [f32; 2],
-    color: [f32; 4],
-    silhouette: f32,
-    local: [f32; 2],
-    half_size: [f32; 2],
-    radii: [f32; 4],
-    border: f32,
-    border_color: [f32; 4],
-    clip_shape: [f32; 4],
-    clip_radii: [f32; 4],
-    gradient_to: [f32; 4],
-    gradient: [f32; 2],
-    gradient_via: [f32; 4],
-    sweep: [f32; 2],
-}
 
 pub(super) const LAYER_PRELUDE: &str = r#"
 struct LayerGlobals {
@@ -359,7 +70,6 @@ struct BlurTargets {
     scene: wgpu::TextureView,
     passes: [(wgpu::TextureView, wgpu::BindGroup); 2],
     blit: wgpu::BindGroup,
-    glass: wgpu::BindGroup,
 }
 
 const LAYER_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -391,8 +101,6 @@ struct LayerUniform {
 
 struct Range {
     tex: u32,
-    rich: bool,
-    glass: bool,
     start: u32,
     count: u32,
     scissor: [u32; 4],
@@ -408,14 +116,9 @@ pub struct Gfx {
     smooth_pipeline: wgpu::RenderPipeline,
     add_mask_pipeline: wgpu::RenderPipeline,
     add_smooth_pipeline: wgpu::RenderPipeline,
-    rich_mask_pipeline: wgpu::RenderPipeline,
-    rich_rgba_pipeline: wgpu::RenderPipeline,
-    rich_smooth_pipeline: wgpu::RenderPipeline,
-    rich_glass_pipeline: wgpu::RenderPipeline,
     blur_pipeline: wgpu::RenderPipeline,
     blur_targets: Option<BlurTargets>,
-    quad_layout_group: wgpu::BindGroupLayout,
-    linear_sampler: wgpu::Sampler,
+    ui_renderer: UiRenderer,
     layer_layout: wgpu::BindGroupLayout,
     layer_pipeline_layout: wgpu::PipelineLayout,
     layer_sampler: wgpu::Sampler,
@@ -428,152 +131,11 @@ pub struct Gfx {
     index_buf: wgpu::Buffer,
     index_cap: u64,
     verts: Vec<QuadVertex>,
-    rich_verts: Vec<RichVertex>,
-    rich_buf: wgpu::Buffer,
-    rich_cap: u64,
     indices: Vec<u32>,
 }
 
 pub use crate::render::core::GfxError;
 use crate::render::core::{GpuContext, GpuLimits};
-
-fn bind_group(
-    device: &wgpu::Device,
-    layout: &wgpu::BindGroupLayout,
-    uniform: &wgpu::Buffer,
-    view: &wgpu::TextureView,
-    sampler: &wgpu::Sampler,
-) -> wgpu::BindGroup {
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("quad-bg"),
-        layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::TextureView(view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::Sampler(sampler),
-            },
-        ],
-    })
-}
-
-const QUAD_ATTRS: [wgpu::VertexAttribute; 4] =
-    wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4, 3 => Float32];
-const RICH_ATTRS: [wgpu::VertexAttribute; 15] = wgpu::vertex_attr_array![
-    0 => Float32x2,
-    1 => Float32x2,
-    2 => Float32x4,
-    3 => Float32,
-    4 => Float32x2,
-    5 => Float32x2,
-    6 => Float32x4,
-    7 => Float32,
-    8 => Float32x4,
-    9 => Float32x4,
-    10 => Float32x4,
-    11 => Float32x4,
-    12 => Float32x2,
-    13 => Float32x4,
-    14 => Float32x2
-];
-
-fn quad_layout() -> wgpu::VertexBufferLayout<'static> {
-    wgpu::VertexBufferLayout {
-        array_stride: std::mem::size_of::<QuadVertex>() as u64,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &QUAD_ATTRS,
-    }
-}
-
-fn rich_layout() -> wgpu::VertexBufferLayout<'static> {
-    wgpu::VertexBufferLayout {
-        array_stride: std::mem::size_of::<RichVertex>() as u64,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &RICH_ATTRS,
-    }
-}
-
-fn rich_vertex(q: &DrawRect, pos: [f32; 2], uv: [f32; 2], silhouette: f32) -> RichVertex {
-    let round = q.round.unwrap_or(RoundShape {
-        center: pos,
-        half: [0.0; 2],
-        radii: [0.0; 4],
-        rotation: 0.0,
-        sweep: None,
-        blur: 0.0,
-        gradient: None,
-        border: 0.0,
-        border_color: [0.0; 4],
-    });
-    let (sin, cos) = round.rotation.sin_cos();
-    let (dx, dy) = (pos[0] - round.center[0], pos[1] - round.center[1]);
-    RichVertex {
-        pos,
-        uv,
-        color: q.color,
-        silhouette,
-        local: [dx * cos + dy * sin, dy * cos - dx * sin],
-        half_size: round.half,
-        radii: round.radii,
-        border: round.border,
-        border_color: round.border_color,
-        clip_shape: q.clip_round.map_or([0.0; 4], |c| {
-            [c.center[0], c.center[1], c.half[0], c.half[1]]
-        }),
-        clip_radii: q.clip_round.map_or([0.0; 4], |c| c.radii),
-        gradient_to: round
-            .sweep
-            .map(|s| s.1)
-            .or(round.gradient.map(|g| g.to))
-            .unwrap_or([0.0; 4]),
-        gradient: round.gradient.map_or([0.0; 2], |g| [g.angle, 1.0]),
-        gradient_via: round.gradient.map_or([0.0; 4], |g| g.via),
-        sweep: round.sweep.map_or([round.blur, 0.0], |s| [s.0, 1.0]),
-    }
-}
-
-fn pipeline(
-    device: &wgpu::Device,
-    layout: &wgpu::PipelineLayout,
-    shader: &wgpu::ShaderModule,
-    fragment: &str,
-    format: wgpu::TextureFormat,
-    blend: wgpu::BlendState,
-    vertex: wgpu::VertexBufferLayout,
-) -> wgpu::RenderPipeline {
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(fragment),
-        layout: Some(layout),
-        vertex: wgpu::VertexState {
-            module: shader,
-            entry_point: Some("vs"),
-            compilation_options: Default::default(),
-            buffers: &[vertex],
-        },
-        primitive: wgpu::PrimitiveState::default(),
-        depth_stencil: None,
-        multisample: wgpu::MultisampleState::default(),
-        fragment: Some(wgpu::FragmentState {
-            module: shader,
-            entry_point: Some(fragment),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format,
-                blend: Some(blend),
-                write_mask: wgpu::ColorWrites::ALL,
-            })],
-        }),
-        multiview_mask: None,
-        cache: None,
-    })
-}
 
 const ADDITIVE: wgpu::BlendState = wgpu::BlendState {
     color: wgpu::BlendComponent {
@@ -609,37 +171,7 @@ impl Gfx {
             mapped_at_creation: false,
         });
 
-        let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("quad-bgl"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
+        let bgl = quad_bind_layout(device);
         let atlas_bind_group = bind_group(device, &bgl, &uniform, &atlas_view, &linear);
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -705,25 +237,7 @@ impl Gfx {
             ADDITIVE,
             quad_layout(),
         );
-        let rich_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("rich-shader"),
-            source: wgpu::ShaderSource::Wgsl(RICH_WGSL.into()),
-        });
-        let rich = |fragment: &str| {
-            pipeline(
-                device,
-                &layout,
-                &rich_shader,
-                fragment,
-                config.format,
-                wgpu::BlendState::ALPHA_BLENDING,
-                rich_layout(),
-            )
-        };
-        let rich_mask_pipeline = rich("fs_mask");
-        let rich_rgba_pipeline = rich("fs_rgba");
-        let rich_smooth_pipeline = rich("fs_smooth");
-        let rich_glass_pipeline = rich("fs_glass");
+        let mut ui_renderer = UiRenderer::new(device, config.format, &atlas_view, &linear);
         let layer_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("layer-bgl"),
             entries: &[
@@ -793,6 +307,7 @@ impl Gfx {
             );
             let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
             sprite_bind_groups.push(bind_group(device, &bgl, &uniform, &view, &linear));
+            ui_renderer.add_sprite(device, &view);
             sprite_textures.push(tex);
         }
 
@@ -834,13 +349,6 @@ impl Gfx {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let rich_cap = 256 * std::mem::size_of::<RichVertex>() as u64;
-        let rich_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("rich-verts"),
-            size: rich_cap,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
         let index_cap = 6144 * std::mem::size_of::<u32>() as u64;
         let index_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("quad-indices"),
@@ -859,14 +367,9 @@ impl Gfx {
             smooth_pipeline,
             add_mask_pipeline,
             add_smooth_pipeline,
-            rich_mask_pipeline,
-            rich_rgba_pipeline,
-            rich_smooth_pipeline,
-            rich_glass_pipeline,
             blur_pipeline,
             blur_targets: None,
-            quad_layout_group: bgl.clone(),
-            linear_sampler: linear.clone(),
+            ui_renderer,
             layer_layout,
             layer_pipeline_layout,
             layer_sampler,
@@ -879,9 +382,6 @@ impl Gfx {
             index_buf,
             index_cap,
             verts: Vec::new(),
-            rich_verts: Vec::new(),
-            rich_buf,
-            rich_cap,
             indices: Vec::new(),
         })
     }
@@ -942,25 +442,21 @@ impl Gfx {
         order: impl Iterator<Item = usize>,
         ranges: &mut Vec<Range>,
     ) {
-        let mut cur: Option<(u32, bool, bool, [u32; 4])> = None;
+        let mut cur: Option<(u32, [u32; 4])> = None;
         let mut start = self.indices.len() as u32;
         for qi in order {
             let q = &quads[qi];
             let sc = self.scissor(q.clip);
-            let rich = q.round.is_some() || q.clip_round.is_some();
-            let glass = q.round.is_some_and(|r| r.blur > 0.0);
-            if cur != Some((q.tex, rich, glass, sc)) {
-                if let Some((tex, rich, glass, scissor)) = cur {
+            if cur != Some((q.tex, sc)) {
+                if let Some((tex, scissor)) = cur {
                     ranges.push(Range {
                         tex,
-                        rich,
-                        glass,
                         start,
                         count: self.indices.len() as u32 - start,
                         scissor,
                     });
                 }
-                cur = Some((q.tex, rich, glass, sc));
+                cur = Some((q.tex, sc));
                 start = self.indices.len() as u32;
             }
             let [x0, y0] = q.min;
@@ -969,32 +465,21 @@ impl Gfx {
             let [u0, v0] = q.uv_min;
             let [u1, v1] = q.uv_max;
             let uvs = q.uvs.unwrap_or([[u0, v0], [u1, v0], [u0, v1], [u1, v1]]);
-            let silhouette = f32::from(u8::from(q.silhouette));
-            let base = if rich {
-                self.rich_verts.len()
-            } else {
-                self.verts.len()
-            } as u32;
+            let base = self.verts.len() as u32;
             for (pos, uv) in pts.into_iter().zip(uvs) {
-                if rich {
-                    self.rich_verts.push(rich_vertex(q, pos, uv, silhouette));
-                } else {
-                    self.verts.push(QuadVertex {
-                        pos,
-                        uv,
-                        color: q.color,
-                        silhouette,
-                    });
-                }
+                self.verts.push(QuadVertex {
+                    pos,
+                    uv,
+                    color: q.color,
+                    silhouette: f32::from(u8::from(q.silhouette)),
+                });
             }
             self.indices
                 .extend_from_slice(&[base, base + 2, base + 3, base, base + 3, base + 1]);
         }
-        if let Some((tex, rich, glass, scissor)) = cur {
+        if let Some((tex, scissor)) = cur {
             ranges.push(Range {
                 tex,
-                rich,
-                glass,
                 start,
                 count: self.indices.len() as u32 - start,
                 scissor,
@@ -1015,19 +500,6 @@ impl Gfx {
         }
         if !vbytes.is_empty() {
             self.gpu.queue.write_buffer(&self.vertex_buf, 0, vbytes);
-        }
-        let rbytes: &[u8] = bytemuck::cast_slice(&self.rich_verts);
-        if rbytes.len() as u64 > self.rich_cap {
-            self.rich_cap = (rbytes.len() as u64).next_power_of_two();
-            self.rich_buf = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("rich-verts"),
-                size: self.rich_cap,
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-        }
-        if !rbytes.is_empty() {
-            self.gpu.queue.write_buffer(&self.rich_buf, 0, rbytes);
         }
         let ibytes: &[u8] = bytemuck::cast_slice(&self.indices);
         if ibytes.len() as u64 > self.index_cap {
@@ -1139,83 +611,35 @@ impl Gfx {
             (second.clone(), group(&first, &down)),
         ];
         let blit = group(&scene, &still);
-        let glass = bind_group(
-            &self.gpu.device,
-            &self.quad_layout_group,
-            &self.uniform,
-            &second,
-            &self.linear_sampler,
-        );
+        self.ui_renderer.set_glass(&self.gpu.device, &second);
         self.blur_targets = Some(BlurTargets {
             size,
             scene,
             passes,
             blit,
-            glass,
         });
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn draw_ranges(
+    fn draw_world(
         &self,
         pass: &mut wgpu::RenderPass,
         ranges: &[Range],
-        start: usize,
-        end: usize,
-        composite_at: Option<usize>,
         world_ranges: usize,
         pixel_world: bool,
     ) {
-        let mut bound_rich = false;
-        if start < end {
+        if !ranges.is_empty() {
             pass.set_vertex_buffer(0, self.vertex_buf.slice(..));
             pass.set_index_buffer(self.index_buf.slice(..), wgpu::IndexFormat::Uint32);
         }
-        let (width, height) = (self.gpu.config.width, self.gpu.config.height);
-        for i in start..=end {
-            if composite_at == Some(i) {
-                for program in &self.layer_programs {
-                    pass.set_scissor_rect(0, 0, width, height);
-                    pass.set_pipeline(&program.pipeline);
-                    pass.set_bind_group(0, &program.group, &[]);
-                    pass.draw(0..3, 0..1);
-                }
-            }
-            if i == end {
-                break;
-            }
-            let Some(r) = ranges.get(i) else {
-                break;
-            };
+        for (i, r) in ranges.iter().enumerate() {
             if r.scissor[2] == 0 || r.scissor[3] == 0 || r.count == 0 {
                 continue;
             }
-            if r.rich != bound_rich {
-                let buffer = if r.rich {
-                    &self.rich_buf
-                } else {
-                    &self.vertex_buf
-                };
-                pass.set_vertex_buffer(0, buffer.slice(..));
-                bound_rich = r.rich;
-            }
-            let glass = self.blur_targets.as_ref().filter(|_| r.glass);
-            if let Some(blur) = glass {
-                pass.set_pipeline(&self.rich_glass_pipeline);
-                pass.set_bind_group(0, &blur.glass, &[]);
-            } else if r.tex == 0 {
-                pass.set_pipeline(if r.rich {
-                    &self.rich_mask_pipeline
-                } else {
-                    &self.mask_pipeline
-                });
+            if r.tex == 0 {
+                pass.set_pipeline(&self.mask_pipeline);
                 pass.set_bind_group(0, &self.atlas_bind_group, &[]);
             } else if let Some(bg) = self.sprite_bind_groups.get(r.tex as usize - 1) {
-                pass.set_pipeline(if r.rich && pixel_world {
-                    &self.rich_rgba_pipeline
-                } else if r.rich {
-                    &self.rich_smooth_pipeline
-                } else if !pixel_world {
+                pass.set_pipeline(if !pixel_world {
                     &self.smooth_pipeline
                 } else if i < world_ranges {
                     &self.pixel_pipeline
@@ -1229,6 +653,13 @@ impl Gfx {
             let [x, y, w, h] = r.scissor;
             pass.set_scissor_rect(x, y, w, h);
             pass.draw_indexed(r.start..r.start + r.count, 0, 0..1);
+        }
+        let (width, height) = (self.gpu.config.width, self.gpu.config.height);
+        for program in &self.layer_programs {
+            pass.set_scissor_rect(0, 0, width, height);
+            pass.set_pipeline(&program.pipeline);
+            pass.set_bind_group(0, &program.group, &[]);
+            pass.draw(0..3, 0..1);
         }
     }
 
@@ -1375,7 +806,6 @@ impl Gfx {
             .write_buffer(&self.uniform, 0, bytemuck::cast_slice(&dims));
 
         self.verts.clear();
-        self.rich_verts.clear();
         self.indices.clear();
         let mut ranges = Vec::new();
 
@@ -1393,14 +823,9 @@ impl Gfx {
             layer_ranges.push((at, own));
         }
 
-        let mut ui_order: Vec<usize> = (0..ui.len()).collect();
-        ui_order.sort_by(|&a, &b| {
-            ui[a]
-                .z
-                .partial_cmp(&ui[b].z)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        self.batch(ui, ui_order.into_iter(), &mut ranges);
+        let size = (self.gpu.config.width as f32, self.gpu.config.height as f32);
+        let device = &self.gpu.device;
+        self.ui_renderer.prepare(device, &self.gpu.queue, ui, size);
         self.upload();
 
         let frame = match self.gpu.surface.get_current_texture() {
@@ -1458,11 +883,10 @@ impl Gfx {
                 pass.draw_indexed(r.start..r.start + r.count, 0, 0..1);
             }
         }
-        let has_glass = ranges.iter().any(|r| r.glass);
+        let has_glass = self.ui_renderer.wants_glass();
         if has_glass {
             self.ensure_blur();
         }
-        let split = if has_glass { drawn_world } else { ranges.len() };
         {
             let c = clear.to_array();
             let target = match (&self.blur_targets, has_glass) {
@@ -1490,15 +914,10 @@ impl Gfx {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            self.draw_ranges(
-                &mut pass,
-                &ranges,
-                0,
-                split,
-                Some(drawn_world),
-                world_ranges,
-                pixel_world,
-            );
+            self.draw_world(&mut pass, &ranges, world_ranges, pixel_world);
+            if !has_glass {
+                self.ui_renderer.draw(&mut pass, pixel_world);
+            }
         }
         if let (true, Some(blur)) = (has_glass, &self.blur_targets) {
             for (target, source) in &blur.passes {
@@ -1521,15 +940,7 @@ impl Gfx {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            self.draw_ranges(
-                &mut pass,
-                &ranges,
-                split,
-                ranges.len(),
-                None,
-                world_ranges,
-                pixel_world,
-            );
+            self.ui_renderer.draw(&mut pass, pixel_world);
         }
         self.gpu.queue.submit([encoder.finish()]);
         frame.present();
@@ -1537,28 +948,17 @@ impl Gfx {
 }
 
 #[cfg(test)]
-mod quad_shader_tests {
-    fn validate(source: &str) {
+mod blur_shader_tests {
+    #[test]
+    fn blur_shader_is_valid() {
         use wgpu::naga;
-        let module = naga::front::wgsl::parse_str(source).unwrap();
+        let source = format!("{}\n{}", super::LAYER_PRELUDE, super::BLUR_WGSL);
+        let module = naga::front::wgsl::parse_str(&source).unwrap();
         naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::default(),
         )
         .validate(&module)
         .unwrap();
-    }
-
-    #[test]
-    fn both_quad_shaders_are_valid() {
-        validate(super::QUAD_WGSL);
-        validate(super::RICH_WGSL);
-        validate(&format!("{}\n{}", super::LAYER_PRELUDE, super::BLUR_WGSL));
-    }
-
-    #[test]
-    fn plain_quads_pay_nothing_for_css_features() {
-        assert_eq!(std::mem::size_of::<super::QuadVertex>(), 36);
-        assert!(!super::QUAD_WGSL.contains("round_paint"));
     }
 }

@@ -3,7 +3,11 @@ use crate::color::Color;
 use crate::ecs::prelude::*;
 use crate::input::{Binding, Input, InputWorld};
 use crate::localization::Localization;
-use crate::ui::{Checkbox, Rect, Stepper, Styled, Text, UI, Z_TOOLTIP, button};
+use crate::sprites::Sprites;
+use crate::ui::{
+    Button, Checkbox, DropState, Dropdown, Icon, IconButton, Rect, Stepper, Styled, Tabs, Text, UI,
+    Z_TOOLTIP, button,
+};
 
 const BUTTON_W: f32 = 300.0;
 const BUTTON_H: f32 = 50.0;
@@ -88,9 +92,86 @@ impl GameMenu {
 }
 
 pub fn install_locale(loc: &mut Localization) {
-    if let Err(e) = loc.load_str("en", include_str!("../assets/locale/en.toml")) {
+    if let Err(e) = loc.load_str("en-US", include_str!("../assets/locale/en.toml")) {
         log::error!("menus locale: {e}");
     }
+}
+
+fn draw_flag(ui: &mut UI, area: Rect, locale: &str) {
+    let name = format!("flag-{locale}");
+    ui.sprite(area, name.as_str(), Color::WHITE);
+}
+
+pub fn language_tabs(world: &mut World, ui: &mut UI, rect: Rect, width: f32) -> bool {
+    let Ok(loc) = world.resource_mut::<Localization>() else {
+        return false;
+    };
+    let locales: Vec<String> = loc.locales().iter().map(|l| l.to_string()).collect();
+    let names: Vec<String> = locales.iter().map(|l| loc.language_name(l)).collect();
+    let labels: Vec<&str> = names.iter().map(String::as_str).collect();
+    let current = locales.iter().position(|l| l == loc.locale()).unwrap_or(0);
+    let flag = |ui: &mut UI, area: Rect, index: usize| draw_flag(ui, area, &locales[index]);
+    let tabs = Tabs::new(rect, &labels)
+        .width(width)
+        .selected(current)
+        .leading(&flag)
+        .id("language");
+    let Some(pick) = ui.add(tabs) else {
+        return false;
+    };
+    loc.set_locale(&locales[pick]);
+    true
+}
+
+pub fn language_button(world: &mut World, ui: &mut UI, rect: Rect, locale: &str) -> bool {
+    let flag = world
+        .resource::<Sprites>()
+        .ok()
+        .and_then(|s| s.find(format!("flag-{locale}").as_str()));
+    let Ok(loc) = world.resource_mut::<Localization>() else {
+        return false;
+    };
+    let id = ("language-button", locale);
+    let clicked = match flag {
+        Some(sprite) => ui
+            .add(IconButton::new(rect, Icon::Sprite(sprite), id))
+            .clicked(),
+        None => ui.add(Button::new(rect, locale).id(id).z(rect.z)).clicked(),
+    };
+    if clicked {
+        loc.set_locale(locale);
+    }
+    clicked
+}
+
+pub fn language_dropdown(
+    world: &mut World,
+    ui: &mut UI,
+    rect: Rect,
+    state: &mut DropState,
+) -> bool {
+    let Ok(loc) = world.resource_mut::<Localization>() else {
+        return false;
+    };
+    let locales: Vec<String> = loc.locales().iter().map(|l| l.to_string()).collect();
+    let names: Vec<String> = locales.iter().map(|l| loc.language_name(l)).collect();
+    let labels: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut selected = loc.language_name(loc.locale());
+    let flag = |ui: &mut UI, area: Rect, name: &str| {
+        if let Some(i) = names.iter().position(|n| n == name) {
+            draw_flag(ui, area, &locales[i]);
+        }
+    };
+    let dropdown = Dropdown::new(rect, &labels, &mut selected, state, "language-dropdown");
+    let changed = ui.add(dropdown.leading(&flag));
+    if let Some(i) = names
+        .iter()
+        .position(|n| *n == selected)
+        .filter(|_| changed)
+    {
+        loc.set_locale(&locales[i]);
+    }
+    changed
 }
 
 pub fn binding_label(binding: Binding) -> String {

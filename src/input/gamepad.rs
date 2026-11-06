@@ -208,6 +208,16 @@ impl Input {
         self.pads.iter_mut().for_each(PadState::end_frame);
     }
 
+    pub(super) fn pad_pressed(&self, button: PadButton) -> bool {
+        self.pads.iter().any(|p| p.pressed.contains(&button))
+    }
+
+    pub(super) fn pad_flicked(&self, axis: PadAxis, dir: AxisDir) -> bool {
+        self.pads.iter().any(|p| {
+            p.axis_value(axis, dir) >= AXIS_THRESHOLD && p.axis_was(axis, dir) < AXIS_THRESHOLD
+        })
+    }
+
     pub(super) fn capture_pad(&self) -> Option<Binding> {
         for pad in &self.pads {
             if let Some(b) = pad.pressed.iter().next() {

@@ -1,3 +1,4 @@
+use super::{AxisDir, PadAxis, PadButton};
 use winit::keyboard::KeyCode;
 
 use super::Input;
@@ -51,12 +52,16 @@ impl Input {
             },
             backspace: self.key_pressed(KeyCode::Backspace),
             delete: self.key_pressed(KeyCode::Delete),
-            enter: self.key_pressed(KeyCode::Enter),
+            enter: self.key_pressed(KeyCode::Enter) || self.pad_pressed(PadButton::South),
             escape: self.key_pressed(KeyCode::Escape),
             left: self.key_pressed(KeyCode::ArrowLeft),
             right: self.key_pressed(KeyCode::ArrowRight),
-            up: self.key_pressed(KeyCode::ArrowUp),
-            down: self.key_pressed(KeyCode::ArrowDown),
+            up: self.key_pressed(KeyCode::ArrowUp)
+                || self.pad_pressed(PadButton::DpadUp)
+                || self.pad_flicked(PadAxis::LeftY, AxisDir::Positive),
+            down: self.key_pressed(KeyCode::ArrowDown)
+                || self.pad_pressed(PadButton::DpadDown)
+                || self.pad_flicked(PadAxis::LeftY, AxisDir::Negative),
             home: self.key_pressed(KeyCode::Home),
             end: self.key_pressed(KeyCode::End),
             shift: self.key_held(KeyCode::ShiftLeft) || self.key_held(KeyCode::ShiftRight),

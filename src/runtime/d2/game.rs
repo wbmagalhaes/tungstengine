@@ -27,7 +27,7 @@ pub fn boot(world: &mut World, assets: GameAssets) {
     world.insert_resource(settings.volume());
     world.insert_resource(crate::rng::Rng::default());
 
-    let mut loc = Localization::new("en");
+    let mut loc = Localization::new("en-US");
     menus::install_locale(&mut loc);
     for (locale, text) in assets.locales {
         if let Err(e) = loc.load_str(locale, text) {
@@ -36,6 +36,7 @@ pub fn boot(world: &mut World, assets: GameAssets) {
     }
     loc.set_locale(&manifest.locale);
     world.insert_resource(loc);
+    crate::flags::install(world.resource_core_mut::<crate::sprites::Sprites>());
 
     world.insert_resource(GameMenu::new(
         &manifest.files.bindings,
